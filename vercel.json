@@ -10,7 +10,7 @@
       "destination": "/api/server"
     },
     {
-      "source": "/((?!api/|sw\\.js|manifest\\.json|.*\\.[a-zA-Z0-9]+$).*)",
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ],
