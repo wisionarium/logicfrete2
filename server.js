@@ -36,16 +36,13 @@ const WEBHOOK_SECRET = (process.env.LOGIC_FRETE_WEBHOOK_SECRET || 'local-secret-
 const TURSO_URL = (process.env.TURSO_DATABASE_URL || '').trim();
 const TURSO_TOKEN = (process.env.TURSO_AUTH_TOKEN || '').trim();
 
+let configError = null;
 if (!TURSO_URL || TURSO_URL.includes('COLE_AQUI')) {
-  console.error('\n  ERRO: TURSO_DATABASE_URL nao configurado no .env');
-  console.error('  Coloque a URL libsql://... do seu banco Turso e rode de novo.\n');
-  process.exit(1);
+  configError = 'TURSO_DATABASE_URL nao configurado (Vercel: Settings > Environment Variables).';
 }
 const IS_LOCAL_FILE = TURSO_URL.startsWith('file:');
-if (!IS_LOCAL_FILE && (!TURSO_TOKEN || TURSO_TOKEN.includes('COLE_AQUI'))) {
-  console.error('\n  ERRO: TURSO_AUTH_TOKEN nao configurado no .env');
-  console.error('  Crie um token no painel do Turso e cole no .env.\n');
-  process.exit(1);
+if (!configError && !IS_LOCAL_FILE && (!TURSO_TOKEN || TURSO_TOKEN.includes('COLE_AQUI'))) {
+  configError = 'TURSO_AUTH_TOKEN nao configurado (Vercel: Settings > Environment Variables).';
 }
 
 const app = express();
@@ -556,11 +553,20 @@ app.get('*', (req, res, next) => {
 
 const INDEX_PATH = path.join(__dirname, 'index.html');
 
-// Pronto quando o schema do Turso foi aplicado (reuso local + serverless Vercel)
-const ready = initDb().then(() => app);
+// Pronto quando o schema do Turso foi aplicado (reuso local + serverless Vercel).
+// Sem process.exit na importacao: na Vercel, erro de config vira 500 JSON (debugavel),
+// nunca FUNCTION_INVOCATION_FAILED.
+const ready = configError
+  ? Promise.reject(new Error(configError))
+  : initDb().then(() => app);
 
 // Servidor local: node server.js / npm run dev
 if (require.main === module) {
+  if (configError) {
+    console.error('\n  ERRO: ' + configError);
+    console.error('  Coloque os valores no .env e rode de novo.\n');
+    process.exit(1);
+  }
   ready.then(() => {
     const server = app.listen(PORT, () => {
       console.log('\n  === LOGIC FRETE ===');
