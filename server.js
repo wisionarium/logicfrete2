@@ -539,17 +539,22 @@ app.get('/api/db-info', async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ============ STATIC (somente o frontend LOGIC FRETE desta pasta) ============
-const BLOCKED = [/^\/.env/, /^\/server\.js/, /^\/db\//, /^\/data\//, /^\/node_modules\//, /\/\.env$/, /\.sql$/, /^\/api\/webhook\.js/];
-app.use((req, res, next) => {
-  if (BLOCKED.some((re) => re.test(req.path))) return res.status(403).send('Forbidden');
-  next();
-});
-app.use(express.static(__dirname, { index: 'index.html' }));
-app.get('*', (req, res, next) => {
-  if (req.path.startsWith('/api/')) return next();
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
+// ============ STATIC (somente no servidor local) ============
+// Na Vercel o CDN serve o frontend; a function atende SO /api/*.
+if (require.main === module) {
+  const BLOCKED = [/^\/.env/, /^\/server\.js/, /^\/db\//, /^\/data\//, /^\/node_modules\//, /\/\.env$/, /\.sql$/, /^\/api\/webhook\.js/];
+  app.use((req, res, next) => {
+    if (BLOCKED.some((re) => re.test(req.path))) return res.status(403).send('Forbidden');
+    next();
+  });
+  app.use(express.static(__dirname, { index: 'index.html' }));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/')) return next();
+    res.sendFile(path.join(__dirname, 'index.html'));
+  });
+} else {
+  app.use((req, res) => res.status(404).json({ error: 'not_found' }));
+}
 
 const INDEX_PATH = path.join(__dirname, 'index.html');
 
