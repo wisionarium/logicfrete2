@@ -556,23 +556,31 @@ app.get('*', (req, res, next) => {
 
 const INDEX_PATH = path.join(__dirname, 'index.html');
 
-initDb().then(() => {
-  const server = app.listen(PORT, () => {
-    console.log('\n  === LOGIC FRETE ===');
-    console.log(`  Pasta do projeto : ${__dirname}`);
-    console.log(`  Pagina inicial   : ${INDEX_PATH}`);
-    console.log(`  Banco            : ${IS_LOCAL_FILE ? 'SQLite local (teste)' : 'Turso (nuvem)'}`);
-    console.log(`  -> Site  : http://localhost:${PORT}   (titulo "LOGIC FRETE")`);
-    console.log(`  -> Banco : http://localhost:${PORT}/api/db-info`);
-    console.log('  -> Login padrao: admin / admin123\n');
-  });
-  server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      console.error(`\n  ERRO: a porta ${PORT} ja esta em uso por OUTRO programa/site.`);
-      console.error('  Feche o outro projeto OU rode este com outra porta, ex.:');
-      console.error('    PowerShell: $env:PORT=3001; npm run dev\n');
-      process.exit(1);
-    }
-    throw err;
-  });
-}).catch((e) => { console.error('Falha ao iniciar banco:', e); process.exit(1); });
+// Pronto quando o schema do Turso foi aplicado (reuso local + serverless Vercel)
+const ready = initDb().then(() => app);
+
+// Servidor local: node server.js / npm run dev
+if (require.main === module) {
+  ready.then(() => {
+    const server = app.listen(PORT, () => {
+      console.log('\n  === LOGIC FRETE ===');
+      console.log(`  Pasta do projeto : ${__dirname}`);
+      console.log(`  Pagina inicial   : ${INDEX_PATH}`);
+      console.log(`  Banco            : ${IS_LOCAL_FILE ? 'SQLite local (teste)' : 'Turso (nuvem)'}`);
+      console.log(`  -> Site  : http://localhost:${PORT}   (titulo "LOGIC FRETE")`);
+      console.log(`  -> Banco : http://localhost:${PORT}/api/db-info`);
+      console.log('  -> Login padrao: admin / admin123\n');
+    });
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`\n  ERRO: a porta ${PORT} ja esta em uso por OUTRO programa/site.`);
+        console.error('  Feche o outro projeto OU rode este com outra porta, ex.:');
+        console.error('    PowerShell: $env:PORT=3001; npm run dev\n');
+        process.exit(1);
+      }
+      throw err;
+    });
+  }).catch((e) => { console.error('Falha ao iniciar banco:', e); process.exit(1); });
+}
+
+module.exports = { app, ready };

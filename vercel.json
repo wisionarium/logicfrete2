@@ -1,6 +1,10 @@
 {
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "/api/server"
+    },
+    {
       "source": "/((?!api/|sw\\.js|manifest\\.json|.*\\.[a-zA-Z0-9]+$).*)",
       "destination": "/index.html"
     }
