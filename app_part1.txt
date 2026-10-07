@@ -1,0 +1,700 @@
+﻿/**
+ * LOGIC FRETE - Main Application Logic
+ * Ties UI, StorageManager, and MapService together.
+ */
+
+  document.addEventListener('DOMContentLoaded', () => {
+    // === AUTHENTICATION LOGIC ===
+    const loginOverlay = document.getElementById('loginOverlay');
+    const mainAppWrapper = document.getElementById('mainAppWrapper');
+    const loginForm = document.getElementById('loginForm');
+    const btnLogout = document.getElementById('btnLogout');
+    let currentUser = null;
+
+    function checkAuth() {
+      currentUser = StorageManager.getCurrentUser();
+      if (currentUser) {
+        if (loginOverlay) loginOverlay.style.display = 'none';
+        if (mainAppWrapper) mainAppWrapper.style.display = 'flex';
+        applyPermissions();
+        
+        // Ensure default tab is selected based on role
+        const defaultTabId = currentUser.role === 'Motorista' ? 'tab-routes' : 'tab-dashboard';
+        const defaultTab = document.getElementById(defaultTabId);
+        if (defaultTab) defaultTab.click();
+        
+        // Initial dashboard refresh
+        refreshDashboard();
+
+        // Wake up map
+        setTimeout(() => {
+          if (MapService.map) MapService.map.resize();
+        }, 500);
+      } else {
+        if (loginOverlay) loginOverlay.style.display = 'flex';
+        if (mainAppWrapper) mainAppWrapper.style.display = 'none';
+      }
+    }
+
+    const loginError = document.getElementById('loginError');
+
+    loginForm?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const user = document.getElementById('loginUser').value;
+      const pass = document.getElementById('loginPass').value;
+      
+      try {
+        const success = await StorageManager.login(user, pass);
+        if (success) {
+          if (loginError) loginError.style.display = 'none';
+          showToast('Login realizado com sucesso!');
+          loginForm.reset();
+          checkAuth();
+          setTimeout(() => {
+            if (MapService.map) MapService.map.resize();
+          }, 100);
+        } else {
+          if (loginError) {
+            loginError.style.display = 'block';
+            loginError.style.animation = 'none';
+            loginError.offsetHeight;
+            loginError.style.animation = null; 
+          }
+          showToast('UsuÃ¡rio ou senha invÃ¡lido!', 'error');
+        }
+      } catch (err) {
+        console.error("Login error:", err);
+        showToast('Erro de conexÃ£o: ' + err.message, 'error');
+      }
+    });
+
+    // Clear error message when user starts typing
+    ['loginUser', 'loginPass'].forEach(id => {
+      document.getElementById(id)?.addEventListener('input', () => {
+        if (loginError) loginError.style.display = 'none';
+      });
+    });
+
+    btnLogout?.addEventListener('click', () => {
+      StorageManager.logout();
+      checkAuth();
+    });
+
+    function applyPermissions() {
+      if (!currentUser) return;
+      
+      const isMaster = currentUser.role === 'MASTER';
+      const isGerente = currentUser.role === 'Gerente';
+      const perms = currentUser.permissions || [];
+
+      const canViewRoute = isMaster || perms.includes('view_route');
+      const canEditRoute = isMaster || perms.includes('edit_route');
+      const canReorder = isMaster || perms.includes('reorder_stops');
+      const canEditNotes = isMaster || perms.includes('edit_notes');
+
+      // Users Tab visibility
+      const tabUsers = document.getElementById('tab-users');
+      const tabDashboard = document.getElementById('tab-dashboard');
+      const tabDrivers = document.getElementById('tab-drivers');
+      const tabMap = document.getElementById('tab-map');
+
+      const isMotorista = currentUser.role === 'Motorista';
+
+      if (tabUsers) tabUsers.style.display = (isMaster || isGerente) ? 'flex' : 'none';
+      if (tabDashboard) tabDashboard.style.display = isMotorista ? 'none' : 'flex';
+      if (tabDrivers) tabDrivers.style.display = isMotorista ? 'none' : 'flex';
+      if (tabMap) tabMap.style.display = isMotorista ? 'none' : 'flex';
+
+      // Sync bottom nav visibility with sidebar tabs
+      const mbnDashboard = document.getElementById('mbn-dashboard');
+      const mbnDrivers  = document.getElementById('mbn-drivers');
+      const mbnMap      = document.getElementById('mbn-map');
+      if (mbnDashboard) mbnDashboard.style.display = isMotorista ? 'none' : 'flex';
+      if (mbnDrivers)   mbnDrivers.style.display   = isMotorista ? 'none' : 'flex';
+      if (mbnMap)       mbnMap.style.display        = isMotorista ? 'none' : 'flex';
+
+      // If motorista, default bottom nav active to routes
+      if (isMotorista) {
+        const mbnRoutes = document.getElementById('mbn-routes');
+        if (mbnRoutes) mbnRoutes.classList.add('active');
+        const mbnDash = document.getElementById('mbn-dashboard');
+        if (mbnDash) mbnDash.classList.remove('active');
+      }
+      
+      // Hide global add buttons based on permissions
+      const btnNewRoute = document.getElementById('btnNewRouteMain');
+      if(btnNewRoute) btnNewRoute.style.display = canEditRoute ? 'inline-flex' : 'none';
+      
+      const btnNewDriver = document.getElementById('btnNewDriverMain');
+      if(btnNewDriver) btnNewDriver.style.display = (isMaster || isGerente) ? 'inline-flex' : 'none';
+      
+      // Store perms globally for render functions
+      window.appPermissions = { canViewRoute, canEditRoute, canReorder, canEditNotes, isMaster, isGerente };
+    }
+
+
+    // Sidebar & Mobile Menu
+    const sidebar = document.getElementById('sidebar');
+    const sidebarOverlay = document.getElementById('sidebarOverlay');
+    const btnOpenSidebar = document.getElementById('btnOpenSidebar');
+    const btnCollapseSidebar = document.getElementById('btnCollapseSidebar');
+    const navTabs = document.querySelectorAll('.nav-tab');
+    const tabPanels = document.querySelectorAll('.tab-panel');
+
+    function toggleMobileMenu(forceClose = false) {
+      if (window.innerWidth <= 768) {
+        if (forceClose) {
+          sidebar.classList.remove('mobile-active');
+          if (sidebarOverlay) sidebarOverlay.classList.remove('active');
+        } else {
+          sidebar.classList.toggle('mobile-active');
+          if (sidebarOverlay) sidebarOverlay.classList.toggle('active');
+        }
+      } else {
+        // On desktop, just collapse sidebar (icon-only mode)
+        if (forceClose) {
+          // do nothing on desktop 'close'
+        } else {
+          sidebar.classList.toggle('collapsed');
+        }
+      }
+      
+      // Fix Map if visible
+      setTimeout(() => {
+        if (MapService.map) MapService.map.resize();
+      }, 300);
+    }
+
+    btnOpenSidebar?.addEventListener('click', () => toggleMobileMenu());
+    sidebarOverlay?.addEventListener('click', () => toggleMobileMenu(true));
+    btnCollapseSidebar?.addEventListener('click', () => toggleMobileMenu(true));
+
+  
+    // Modals
+    const modalRoute = document.getElementById('modalRoute');
+    const modalDelivery = document.getElementById('modalDelivery');
+    const modalDriver = document.getElementById('modalDriver');
+    
+    // Confirm Dialog
+    const confirmDialog = document.getElementById('confirmDialog');
+    let confirmCallback = null;
+  
+    // Route Detail Panel
+    const routeDetailPanel = document.getElementById('routeDetailPanel');
+    const rdpClose = document.getElementById('rdpClose');
+    let activeRouteId = null; // Track which route is selected
+    let expandedRouteIds = new Set();
+
+    // Main Content Views
+    const mainDashboardView = document.getElementById('mainDashboardView');
+    const mainRoutesView = document.getElementById('mainRoutesView');
+    const mainCalendarView = document.getElementById('mainCalendarView');
+    const mainDriversView = document.getElementById('mainDriversView');
+    const mainUsersView = document.getElementById('mainUsersView');
+
+    // Helper to get local date in YYYY-MM-DD format
+    window.getLocalISODate = function() {
+      const now = new Date();
+      return now.getFullYear() + '-' + 
+             String(now.getMonth() + 1).padStart(2, '0') + '-' + 
+             String(now.getDate()).padStart(2, '0');
+    }
+
+    const allMainViews = [
+      mainDashboardView,
+      mainRoutesView,
+      mainCalendarView,
+      mainDriversView,
+      mainUsersView
+    ];
+
+    const mapAreaElements = [
+      document.getElementById('mapControlsOverlay'),
+      document.getElementById('map'),
+      document.getElementById('routeDetailPanel')
+    ];
+  
+    // Helper to navigate to map and load a route
+    function navigateToMap(routeId, readOnly = false) {
+      // Toggle tab active state in sidebar
+      document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+      document.getElementById('tab-map').classList.add('active');
+      
+      showMainView('map');
+      
+      // Force readOnly if no edit permission
+      const finalReadOnly = readOnly || (window.appPermissions && !window.appPermissions.canEditRoute);
+      
+      if (routeId) loadRouteToMap(routeId, finalReadOnly);
+    }
+
+
+    // Global click listener to collapse items when clicking outside
+    document.addEventListener('click', (e) => {
+      const isListItem = e.target.closest('.list-item');
+      const isModal = e.target.closest('.modal-content') || e.target.closest('.confirm-dialog-content');
+      const isAction = e.target.closest('.details-actions') || e.target.closest('.stop-actions-small');
+      
+      if (!isListItem && !isModal && !isAction) {
+        if (expandedRouteIds.size > 0) {
+          expandedRouteIds.clear();
+          if (document.getElementById('panel-routes')?.classList.contains('active')) renderRoutesList();
+        }
+      }
+    });
+
+    // === EVENT LISTENERS: SIDEBAR & NAVIGATION ===
+    const btnAccessMap = document.getElementById('btnAccessMap');
+    btnAccessMap?.addEventListener('click', () => navigateToMap());
+
+    function showMainView(viewId) {
+      if (viewId === 'map') {
+        allMainViews.forEach(v => { if(v) v.style.display = 'none'; });
+        mapAreaElements.forEach(el => {
+          if(el) el.style.display = el.id === 'routeDetailPanel' ? (activeRouteId ? 'flex' : 'none') : 'flex';
+        });
+        setTimeout(() => {
+          if (MapService && MapService.map) MapService.map.resize();
+        }, 100);
+        return;
+      }
+
+      allMainViews.forEach(v => {
+        if(v) v.style.display = v.id === viewId ? 'flex' : 'none';
+      });
+      mapAreaElements.forEach(el => {
+        if(el) el.style.display = 'none';
+      });
+      
+      // Refresh data
+      if (viewId === 'mainDashboardView') refreshDashboard();
+      if (viewId === 'mainRoutesView') renderRoutesList();
+      if (viewId === 'mainCalendarView') renderCalendarView();
+      if (viewId === 'mainDriversView') renderDriversList();
+      if (viewId === 'mainUsersView') renderUsersList();
+    }
+  
+    navTabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        // Close menu on mobile
+        toggleMobileMenu(true);
+
+        // Remove active
+        navTabs.forEach(t => t.classList.remove('active'));
+        tabPanels.forEach(p => p.classList.remove('active'));
+        // Add active
+        tab.classList.add('active');
+        const targetId = `panel-${tab.dataset.tab}`;
+        const targetPanel = document.getElementById(targetId);
+        if(targetPanel) targetPanel.classList.add('active');
+        
+        // Sync bottom nav active state
+        updateBottomNavActive(tab.dataset.tab);
+
+        // Refresh data based on tab
+        const viewMap = {
+          'dashboard': 'mainDashboardView',
+          'routes': 'mainRoutesView',
+          'calendar': 'mainCalendarView',
+          'drivers': 'mainDriversView',
+          'users': 'mainUsersView',
+          'map': 'map'
+        };
+        showMainView(viewMap[tab.dataset.tab]);
+      });
+    });
+
+    // === KEYBOARD NAVIGATION ===
+    document.addEventListener('keydown', (e) => {
+      const isModalOpen = document.querySelector('.modal-overlay.active, .confirm-dialog.active');
+      const isTyping = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+      if (isModalOpen || isTyping) return;
+
+      const activeTab = document.querySelector('.nav-tab.active');
+      if (!activeTab) return;
+
+      const tabs = Array.from(document.querySelectorAll('.nav-tab:not([style*="display: none"])'));
+      const currentIndex = tabs.indexOf(activeTab);
+
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        const nextIndex = (currentIndex + 1) % tabs.length;
+        tabs[nextIndex].click();
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        const prevIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+        tabs[prevIndex].click();
+      }
+    });
+
+    // === MOBILE BOTTOM NAVIGATION ===
+    const mobileNavItems = document.querySelectorAll('.mobile-nav-item');
+
+    function updateBottomNavActive(tabId) {
+      mobileNavItems.forEach(item => {
+        item.classList.toggle('active', item.dataset.tab === tabId);
+      });
+    }
+
+    mobileNavItems.forEach(item => {
+      item.addEventListener('click', () => {
+        const tabId = item.dataset.tab;
+        const sidebarTab = document.getElementById(`tab-${tabId}`);
+        if (sidebarTab && sidebarTab.style.display !== 'none') {
+          sidebarTab.click();
+        }
+      });
+    });
+
+    // Initialize bottom nav active state to match default tab
+    updateBottomNavActive('dashboard');
+
+    // === DASHBOARD STAT CARDS CLICKS ===
+    document.getElementById('stat-routes-main')?.addEventListener('click', () => {
+      document.getElementById('tab-routes').click();
+      setTimeout(() => {
+        const filter = document.querySelector('#mainRoutesView .filter-chips [data-filter="all"]');
+        if(filter) filter.click();
+      }, 50);
+    });
+
+    document.getElementById('stat-pending-main')?.addEventListener('click', () => {
+      document.getElementById('tab-routes').click();
+      setTimeout(() => {
+        const filter = document.querySelector('#mainRoutesView .filter-chips [data-filter="planned"]');
+        if(filter) filter.click();
+      }, 50);
+    });
+
+    document.getElementById('stat-done-main')?.addEventListener('click', () => {
+      document.getElementById('tab-routes').click();
+      setTimeout(() => {
+        const filter = document.querySelector('#mainRoutesView .filter-chips [data-filter="done"]');
+        if(filter) filter.click();
+      }, 50);
+    });
+    
+    // (Old stat listeners removed)
+
+    document.getElementById('stat-km-main')?.addEventListener('click', () => {
+      document.getElementById('tab-routes').click();
+    });
+  
+    // === SIDEBAR COLLAPSE LOGIC ===
+    // Restore collapsed state only on desktop
+    if (window.innerWidth > 768) {
+      const isSidebarCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
+      if (isSidebarCollapsed) sidebar.classList.add('collapsed');
+    }
+
+    // Persist desktop collapse state
+    if (btnCollapseSidebar) {
+      btnCollapseSidebar.addEventListener('change', () => {
+        if (window.innerWidth > 768) {
+          localStorage.setItem('sidebarCollapsed', sidebar.classList.contains('collapsed'));
+        }
+      });
+    }
+
+    // === MAP CONTROLS ===
+    document.getElementById('btnLocate')?.addEventListener('click', () => MapService.locateUser());
+    document.getElementById('btnFitAll')?.addEventListener('click', () => MapService.fitAll());
+    document.getElementById('btnExport')?.addEventListener('click', () => StorageManager.exportData());
+  
+    // === MAP THEME SWITCHER ===
+    document.querySelectorAll('.theme-btn[data-theme]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const theme = e.currentTarget.getAttribute('data-theme');
+        MapService.setBaseLayer(theme);
+        
+        // UI Update
+        document.querySelectorAll('.theme-btn[data-theme]').forEach(b => b.classList.remove('active'));
+        e.currentTarget.classList.add('active');
+      });
+    });
+
+    document.getElementById('btnTraffic')?.addEventListener('click', (e) => {
+      const isActive = MapService.toggleTraffic();
+      e.currentTarget.classList.toggle('active', isActive);
+      
+      if(isActive) {
+        showToast('TrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢nsito em tempo real ativado');
+      } else {
+        showToast('TrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢nsito desativado');
+      }
+    });
+
+    // === SEARCH SUGGESTIONS LOGIC (Nominatim) ===
+    let debounceTimer;
+    function setupAddressSearch(inputId, suggestionsId, latId, lngId, wrapId) {
+      const input = document.getElementById(inputId);
+      const suggestions = document.getElementById(suggestionsId);
+      
+      input.addEventListener('input', (e) => {
+        clearTimeout(debounceTimer);
+        const query = e.target.value;
+        if (query.length < 3) {
+          suggestions.style.display = 'none';
+          return;
+        }
+        
+        debounceTimer = setTimeout(async () => {
+          const results = await MapService.searchAddress(query);
+          suggestions.innerHTML = '
+          
+          if (results.length === 0) {
+            suggestions.innerHTML = '<div class="suggestion-item"><span class="suggestion-text">Nenhum endereÃƒÂ§o encontrado</span></div>';
+          } else {
+            results.forEach(res => {
+              const div = document.createElement('div');
+              div.className = 'suggestion-item';
+              div.innerHTML = `<i class="ri-map-pin-line"></i> <span class="suggestion-text">${res.address}</span>`;
+              div.addEventListener('click', () => {
+                input.value = res.address;
+                if (latId && lngId) {
+                  document.getElementById(latId).value = res.lat;
+                  document.getElementById(lngId).value = res.lng;
+                  if (document.getElementById(wrapId)) { // Also save address string
+                     document.getElementById(wrapId).value = res.address;
+                  }
+                }
+                suggestions.style.display = 'none';
+                
+                // If it's the main map search
+                if (inputId === 'addressSearchInput') {
+                  // MapLibre uses flyTo and [lng, lat]
+                  MapService.map.flyTo({ center: [res.lng, res.lat], zoom: 16 });
+                  const marker = MapService.createMarker(res.lat, res.lng, ', 'planned');
+                  marker.setPopup(new maplibregl.Popup({ offset: 25 }).setText(res.address)).togglePopup();
+                }
+              });
+              suggestions.appendChild(div);
+            });
+          }
+          suggestions.style.display = 'block';
+        }, 500);
+      });
+  
+      // Hide on blur
+      document.addEventListener('click', (e) => {
+        if (!input.contains(e.target) && !suggestions.contains(e.target)) {
+          suggestions.style.display = 'none';
+        }
+      });
+    }
+  
+    setupAddressSearch('addressSearchInput', 'searchSuggestions', null, null, null);
+    setupAddressSearch('routeOriginInput', 'originSuggestions', 'routeOriginLat', 'routeOriginLng', 'routeOriginAddr');
+    setupAddressSearch('deliveryAddressInput', 'deliverySuggestions', 'deliveryLat', 'deliveryLng', 'deliveryAddr');
+  
+    document.getElementById('clearSearch').addEventListener('click', () => {
+      document.getElementById('addressSearchInput').value = '
+      MapService.clearMap();
+    });
+
+    // CPF/CNPJ Mask & Limit
+    const deliveryCpfInput = document.getElementById('deliveryCpf');
+    deliveryCpfInput?.addEventListener('input', (e) => {
+      let v = e.target.value.replace(/\D/g, '); // Remove non-digits
+      if (v.length > 14) v = v.slice(0, 14); // Limit to 14 numbers (CNPJ max)
+      
+      if (v.length <= 11) {
+        // CPF Mask: 000.000.000-00
+        v = v.replace(/(\d{3})(\d)/, '$1.$2');
+        v = v.replace(/(\d{3})(\d)/, '$1.$2');
+        v = v.replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+      } else {
+        // CNPJ Mask: 00.000.000/0000-00
+        v = v.replace(/^(\d{2})(\d)/, '$1.$2');
+        v = v.replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3');
+        v = v.replace(/\.(\d{3})(\d)/, '.$1/$2');
+        v = v.replace(/(\d{4})(\d{1,2})$/, '$1-$2');
+      }
+      e.target.value = v;
+    });
+  
+    // === ROUTE MODAL LOGIC ===
+    const btnNewRoute = document.getElementById('btnNewRoute');
+    const btnNewRouteEmpty = document.getElementById('btnNewRouteEmpty');
+    const closeModalRoute = document.getElementById('closeModalRoute');
+    const cancelModalRoute = document.getElementById('cancelModalRoute');
+    const saveRouteBtn = document.getElementById('saveRoute');
+    let editingRouteId = null;
+  
+    function openRouteModal(routeId = null) {
+      editingRouteId = routeId;
+      const title = document.getElementById('modalRouteTitle');
+      const driverSelect = document.getElementById('routeDriver');
+      
+      // Populate Drivers (Traditional Drivers + Users with role Motorista)
+      driverSelect.innerHTML = '<option value="">Sem motorista</option>';
+      
+      const traditionalDrivers = StorageManager.getDrivers();
+      const userDrivers = StorageManager.getUsers().filter(u => u.role === 'Motorista');
+      
+      const allPossibleDrivers = [
+        ...traditionalDrivers.map(d => ({ id: d.id, name: d.name, label: d.name })),
+        ...userDrivers.map(u => ({ id: u.id, name: u.name, label: `${u.name} (UsuÃ¡rio)` }))
+      ];
+
+      allPossibleDrivers.forEach(d => {
+        driverSelect.innerHTML += `<option value="${d.id}">${d.label}</option>`;
+      });
+  
+      if (routeId) {
+        title.innerText = 'Editar Rota';
+        const route = StorageManager.getRoute(routeId);
+        if (!route) return closeRouteModal();
+        
+        document.getElementById('routeName').value = route.name || '
+        document.getElementById('routeDate').value = route.date || '
+        document.getElementById('routeDriver').value = route.driverId || '
+        document.getElementById('routeNotes').value = route.notes || '
+        document.getElementById('routeVehicle').value = route.vehicle || '
+        document.getElementById('routePlate').value = route.plate || '
+        if (route.origin) {
+          document.getElementById('routeOriginInput').value = route.origin.address || '
+          document.getElementById('routeOriginLat').value = route.origin.lat || '
+          document.getElementById('routeOriginLng').value = route.origin.lng || '
+          document.getElementById('routeOriginAddr').value = route.origin.address || '
+        }
+        
+        const colorVal = route.color || 'default';
+        document.querySelectorAll('input[name="routeColor"]').forEach(input => {
+          input.checked = input.value === colorVal;
+        });
+      } else {
+        title.innerText = 'Nova Rota';
+        document.getElementById('routeName').value = '
+        document.getElementById('routeDate').value = getLocalISODate();
+        document.getElementById('routeDriver').value = '
+        document.getElementById('routeNotes').value = '
+        document.getElementById('routeVehicle').value = '
+        document.getElementById('routePlate').value = '
+        document.getElementById('routeOriginInput').value = '
+        document.getElementById('routeOriginLat').value = '
+        document.getElementById('routeOriginLng').value = '
+        document.getElementById('routeOriginAddr').value = '
+        
+        document.querySelectorAll('input[name="routeColor"]').forEach(input => {
+          input.checked = input.value === 'default';
+        });
+      }
+
+      // Permissions check for notes
+      const notesField = document.getElementById('routeNotes');
+      if (notesField) {
+        notesField.disabled = !(window.appPermissions?.canEditNotes);
+      }
+
+      modalRoute.classList.add('active');
+    }
+
+  
+    function closeRouteModal() { modalRoute.classList.remove('active'); }
+  
+    btnNewRoute?.addEventListener('click', () => openRouteModal());
+    document.getElementById('btnNewRouteMain')?.addEventListener('click', () => openRouteModal());
+    btnNewRouteEmpty?.addEventListener('click', () => openRouteModal());
+    closeModalRoute.addEventListener('click', closeRouteModal);
+    cancelModalRoute.addEventListener('click', closeRouteModal);
+  
+    saveRouteBtn.addEventListener('click', async () => {
+      const name = document.getElementById('routeName').value.trim();
+      const lat = document.getElementById('routeOriginLat').value;
+      const lng = document.getElementById('routeOriginLng').value;
+      const addr = document.getElementById('routeOriginInput').value.trim();
+  
+      if (!name) return showToast('Nome da rota ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â© obrigatÃƒÂ³rio', 'error');
+      if (!addr) return showToast('Informe o ponto de partida', 'error');
+      
+      // If user typed address but didn't pick from autocomplete, warn but allow
+      if (!lat || !lng) {
+        showToast('EndereÃƒÂ§o sem coordenadas ÃƒÂ­Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â busque e selecione um endereÃƒÂ§o da lista para melhor precisÃƒÂ£o', 'warning');
+      }
+  
+      const routeData = {
+        id: editingRouteId,
+        name: name,
+        date: document.getElementById('routeDate').value,
+        driverId: document.getElementById('routeDriver').value || null,
+        notes: document.getElementById('routeNotes').value,
+        vehicle: document.getElementById('routeVehicle').value,
+        plate: document.getElementById('routePlate').value,
+        color: document.querySelector('input[name="routeColor"]:checked')?.value || 'default',
+        origin: {
+          lat: lat ? parseFloat(lat) : null,
+          lng: lng ? parseFloat(lng) : null,
+          address: addr
+        }
+      };
+  
+      try {
+        await StorageManager.saveRoute(routeData);
+        showToast('Rota salva com sucesso!');
+        closeRouteModal();
+        renderRoutesList();
+        refreshDashboard();
+        if(activeRouteId === editingRouteId) loadRouteToMap(editingRouteId);
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+  
+    // === DELIVERY MODAL LOGIC ===
+    const btnNewDelivery = document.getElementById('btnNewDelivery');
+    const rdpAddStop = document.getElementById('rdpAddStop');
+    const closeModalDelivery = document.getElementById('closeModalDelivery');
+    const cancelModalDelivery = document.getElementById('cancelModalDelivery');
+    const saveDeliveryBtn = document.getElementById('saveDelivery');
+    let editingDeliveryId = null;
+  
+    function openDeliveryModal(deliveryId = null, preSelectRouteId = null) {
+      editingDeliveryId = deliveryId;
+      const title = document.getElementById('modalDeliveryTitle');
+      const routeSelect = document.getElementById('deliveryRoute');
+  
+      // Populate Routes
+      routeSelect.innerHTML = '<option value="">Selecione uma rota...</option>';
+      StorageManager.getRoutes().forEach(r => {
+        routeSelect.innerHTML += `<option value="${r.id}">${r.name}</option>`;
+      });
+  
+      if (preSelectRouteId) {
+        routeSelect.value = preSelectRouteId;
+        // Calculate next order
+        const stops = StorageManager.getDeliveriesByRoute(preSelectRouteId);
+        document.getElementById('deliveryOrder').value = stops.length + 1;
+      }
+  
+      if (deliveryId) {
+        title.innerText = 'Editar Parada';
+        const d = StorageManager.getDeliveries().find(x => x.id === deliveryId);
+        if (!d) return closeDeliveryModal();
+        
+        routeSelect.value = d.routeId;
+        document.getElementById('deliveryRecipient').value = d.recipient;
+        document.getElementById('deliveryCpf').value = d.cpf || '
+        document.getElementById('deliveryPhone').value = d.phone || '
+        document.getElementById('deliveryOrder').value = d.order || 1;
+        document.getElementById('deliveryStatus').value = d.status || 'pending';
+        document.getElementById('deliveryNotes').value = d.notes || '
+        
+        document.getElementById('deliveryAddressInput').value = d.address || '
+        document.getElementById('deliveryLat').value = d.lat || '
+        document.getElementById('deliveryLng').value = d.lng || '
+        document.getElementById('deliveryAddr').value = d.address || '
+      } else {
+        title.innerText = 'Nova Parada';
+        if(!preSelectRouteId) routeSelect.value = '
+        document.getElementById('deliveryRecipient').value = '
+        document.getElementById('deliveryCpf').value = '
+        document.getElementById('deliveryPhone').value = '
+        document.getElementById('deliveryStatus').value = 'pending';
+        document.getElementById('deliveryNotes').value = '
+        document.getElementById('deliveryAddressInput').value = '
+        document.getElementById('deliveryLat').value = '
+        document.getElementById('deliveryLng').value = '
+        document.getElementById('deliveryAddr').value = '
+      }
+
+      // Permissions check for notes
+      const notesField = document.getElementById('deliveryNotes');

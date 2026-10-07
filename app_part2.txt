@@ -1,0 +1,700 @@
+﻿      if (notesField) {
+        notesField.disabled = !(window.appPermissions?.canEditNotes);
+      }
+
+      modalDelivery.classList.add('active');
+    }
+
+  
+    function closeDeliveryModal() { modalDelivery.classList.remove('active'); }
+    window.openDeliveryModalFromList = function(id) { openDeliveryModal(id); }
+    window.openDeliveryModalForRoute = function(routeId) { openDeliveryModal(null, routeId); }
+  
+    btnNewDelivery?.addEventListener('click', () => openDeliveryModal());
+    document.getElementById('btnNewDeliveryMain')?.addEventListener('click', () => openDeliveryModal());
+    rdpAddStop?.addEventListener('click', () => openDeliveryModal(null, activeRouteId));
+    closeModalDelivery.addEventListener('click', closeDeliveryModal);
+    cancelModalDelivery.addEventListener('click', closeDeliveryModal);
+  
+    saveDeliveryBtn.addEventListener('click', async () => {
+      const routeId = document.getElementById('deliveryRoute').value;
+      const recipient = document.getElementById('deliveryRecipient').value;
+      const lat = document.getElementById('deliveryLat').value;
+      const lng = document.getElementById('deliveryLng').value;
+      const addr = document.getElementById('deliveryAddressInput').value;
+  
+      if (!routeId) return showToast('Selecione uma rota', 'error');
+      if (!recipient) return showToast('Nome do Cliente ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â© obrigatÃƒÂ³rio', 'error');
+      if (!lat || !lng) return showToast('Selecione um endereÃƒÂ§o vÃƒÂ¡lido', 'error');
+  
+      const deliveryData = {
+        id: editingDeliveryId,
+        routeId: routeId,
+        recipient: recipient,
+        cpf: document.getElementById('deliveryCpf').value,
+        phone: document.getElementById('deliveryPhone').value,
+        order: parseInt(document.getElementById('deliveryOrder').value) || 1,
+        status: document.getElementById('deliveryStatus').value,
+        notes: document.getElementById('deliveryNotes').value,
+        address: addr,
+        lat: parseFloat(lat),
+        lng: parseFloat(lng)
+      };
+  
+      try {
+        await StorageManager.saveDelivery(deliveryData);
+        showToast('Parada salva com sucesso!');
+        closeDeliveryModal();
+        renderDeliveriesList();
+        refreshDashboard();
+        
+        // Update map if the route is active
+        if (activeRouteId === routeId) {
+          loadRouteToMap(routeId);
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+  
+    // === DRIVER MODAL LOGIC ===
+    const btnNewDriver = document.getElementById('btnNewDriver');
+    const btnNewDriverEmpty = document.getElementById('btnNewDriverEmpty');
+    const closeModalDriver = document.getElementById('closeModalDriver');
+    const cancelModalDriver = document.getElementById('cancelModalDriver');
+    const saveDriverBtn = document.getElementById('saveDriver');
+    let editingDriverId = null;
+  
+    function openDriverModal(driverId = null) {
+      editingDriverId = driverId;
+      const title = document.getElementById('modalDriverTitle');
+      if (driverId) {
+        title.innerText = 'Editar Motorista';
+        const driver = StorageManager.getDriver(editingDriverId);
+        document.getElementById('driverName').value = driver.name || '
+        document.getElementById('driverPhone').value = driver.phone || '
+      } else {
+        title.innerText = 'Novo Motorista';
+        document.getElementById('driverName').value = '
+        document.getElementById('driverPhone').value = '
+      }
+      modalDriver.classList.add('active');
+    }
+  
+    function closeDriverModal() { modalDriver.classList.remove('active'); }
+  
+    btnNewDriver?.addEventListener('click', () => openDriverModal());
+    document.getElementById('btnNewDriverMain')?.addEventListener('click', () => openDriverModal());
+    btnNewDriverEmpty?.addEventListener('click', () => openDriverModal());
+    closeModalDriver.addEventListener('click', closeDriverModal);
+    cancelModalDriver.addEventListener('click', closeDriverModal);
+  
+    saveDriverBtn.addEventListener('click', async () => {
+      const name = document.getElementById('driverName').value;
+      if (!name) return showToast('Nome ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â© obrigatÃƒÂ³rio', 'error');
+  
+      const driverData = {
+        id: editingDriverId,
+        name: name,
+        phone: document.getElementById('driverPhone').value
+      };
+
+      try {
+        await StorageManager.saveDriver(driverData);
+        showToast('Motorista salvo com sucesso!');
+        closeDriverModal();
+        renderDriversList();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+  
+  
+    // === RENDERING FUNCTIONS ===
+  
+    // STATUS TRANSLATIONS & COLORS
+    const statusMap = {
+      'planned': { label: 'Planejada', class: 'planned' },
+      'active': { label: 'Em Andamento', class: 'active' },
+      'done': { label: 'ConcluÃƒÂ­da', class: 'done' },
+      'pending': { label: 'Pendente', class: 'pending' },
+      'in_route': { label: 'Em Rota', class: 'active' },
+      'delivered': { label: 'Entregue', class: 'done' },
+      'failed': { label: 'Falha', class: 'failed' },
+      'rescheduled': { label: 'Reagendado', class: 'planned' }
+    };
+  
+    function renderRoutesList() {
+      const list = document.getElementById('routesListMain');
+      if(!list) return;
+      const routes = StorageManager.getRoutes();
+      const activeFilterElement = document.querySelector('#mainRoutesView .filter-chips .chip.active');
+      const activeFilter = activeFilterElement ? activeFilterElement.dataset.filter : 'all';
+      
+      let filtered = routes;
+      if(activeFilter !== 'all') {
+        filtered = routes.filter(r => r.status === activeFilter);
+      }
+  
+      // Search filter
+      const searchInput = document.getElementById('searchRoutesMain');
+      const q = searchInput ? searchInput.value.toLowerCase() : ';
+      if (q) {
+        filtered = filtered.filter(r => r.name.toLowerCase().includes(q));
+      }
+  
+      if (filtered.length === 0) {
+        list.innerHTML = `
+          <div class="empty-state" style="grid-column: 1 / -1">
+            <i class="ri-route-line"></i>
+            <p>Nenhuma rota encontrada</p>
+          </div>
+        `;
+        return;
+      }
+  
+      list.innerHTML = '
+      filtered.forEach(r => {
+        const stops = StorageManager.getDeliveriesByRoute(r.id);
+        const dCount = stops.length;
+        const driver = r.driverId ? (StorageManager.getDrivers().find(d => d.id === r.driverId) || StorageManager.getUsers().find(u => u.id === r.driverId)) : null;
+        const driverDisplay = driver ? `${driver.name}${r.vehicle ? ` ÃƒÂ­Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ ${r.vehicle}` : '}` : 'Sem motorista';
+        const st = statusMap[r.status] || statusMap['planned'];
+        const colorClass = r.color && r.color !== 'default' ? `card-${r.color}` : ';
+        
+        // Stops preview string (Addresses)
+        const stopsPreview = stops.length > 0 
+          ? stops.slice(0, 3).map(s => s.address ? s.address.split(',')[0] : 'S/ Ref').join(' ÃƒÂ­Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ ') + (stops.length > 3 ? '...' : ')
+          : 'Nenhuma parada';
+  
+        const div = document.createElement('div');
+        div.className = `list-item ${activeRouteId === r.id ? 'selected' : '} ${expandedRouteIds.has(r.id) ? 'expanded' : '} ${colorClass}`;
+        div.setAttribute('data-route-id', r.id);
+        
+        // Auto-expand on drag enter
+        div.ondragenter = (e) => {
+          const isDragging = document.querySelector('.stop-detail-item.dragging');
+          if (isDragging && !div.classList.contains('expanded')) {
+            div.classList.add('expanded');
+            expandedRouteIds.add(r.id);
+          }
+        };
+        
+        const canEdit = window.appPermissions?.canEditRoute;
+        const canReorder = window.appPermissions?.canReorder;
+
+        let stopsHtml = stops.map((s, i) => `
+          <div class="stop-detail-item" 
+               draggable="${canReorder ? 'true' : 'false'}" 
+               ${canReorder ? `
+               ondragstart="window.handleStopDragStart(event, '${s.id}')"
+               ondragend="window.handleStopDragEnd(event)"
+               ondrop="window.handleStopDrop(event, '${r.id}', '${s.id}')"` : '}>
+            <div class="stop-detail-index">${i + 1}</div>
+            <div class="stop-detail-info">
+              <span class="stop-detail-name">${s.recipient}</span>
+              <span class="stop-detail-addr">${s.address || 'Sem endereÃƒÂ§o'}</span>
+            </div>
+            <div class="stop-actions-small" style="${canEdit ? ' : 'display:none'}">
+              <button class="btn-icon-xs" title="Editar Parada" onclick="event.stopPropagation(); window.openDeliveryModalFromList('${s.id}')"><i class="ri-edit-2-line"></i></button>
+              <button class="btn-icon-xs" title="Remover Parada" onclick="event.stopPropagation(); window.deleteDeliveryFromList('${s.id}')"><i class="ri-delete-bin-line"></i></button>
+            </div>
+          </div>
+        `).join(');
+
+        if (stops.length === 0) {
+          stopsHtml = '<p class="text-muted" style="font-size:0.8rem; padding: 10px 0;">Nenhuma parada cadastrada.</p>';
+        }
+
+        div.innerHTML = `
+          <div class="task-header">
+            <div class="task-indicator ${d.status === 'delivered' ? 'delivered' : '}"></div>
+            <div class="task-title">${(d.recipient || 'SEM NOME').toUpperCase()}</div>
+          </div>
+          <div class="task-body">
+            <div class="task-row"><span class="task-label">NOME:</span> <span class="task-value">${d.recipient}</span></div>
+            <div class="task-row"><span class="task-label">CPF:</span> <span class="task-value">${d.cpf || '-'}</span></div>
+            <div class="task-row"><span class="task-label">TEL:</span> <span class="task-value">${d.phone || '-'}</span></div>
+            <div class="task-row"><span class="task-label">END:</span> <span class="task-value">${d.address || '-'}</span></div>
+            ${d.notes ? `<div class="task-notes">${d.notes}</div>` : '}
+          </div>
+          <div class="task-footer">
+            <div class="task-date"><i class="ri-calendar-line"></i> ${route ? formatDate(route.date) : '-'}</div>
+            <div class="details-actions">
+              ${window.appPermissions?.canEditRoute ? `<button class="btn-icon-xs" onclick="event.stopPropagation(); window.openDeliveryModalFromList('${d.id}')" title="Editar"><i class="ri-edit-line"></i></button>` : '}
+              <button class="btn-icon-xs" onclick="event.stopPropagation(); window.viewOnMap('${d.routeId}')" title="Ver no Mapa"><i class="ri-map-2-line"></i></button>
+            </div>
+          </div>
+        `;
+
+        div.addEventListener('click', () => {
+          const wasExpanded = div.classList.contains('expanded');
+          
+          // Clear others if you want only one expanded at a time
+          document.querySelectorAll('.list-item.expanded').forEach(item => {
+            item.classList.remove('expanded');
+            const rid = item.getAttribute('data-route-id');
+            if(rid) expandedRouteIds.delete(rid);
+          });
+
+          if (!wasExpanded) {
+            div.classList.add('expanded');
+            expandedRouteIds.add(r.id);
+          }
+        });
+        list.appendChild(div);
+      });
+    }
+
+    // Global helpers for list actions
+    window.openDeliveryModalFromList = (id) => openDeliveryModal(id);
+    window.updateRouteStatusFromList = (id, status) => {
+      if (status === 'done') {
+        openConfirmDialog('Deseja realmente concluir esta rota?', () => updateRouteStatus(id, status));
+      } else if (status === 'active' && StorageManager.getRoute(id).status === 'done') {
+        openConfirmDialog('Deseja reativar esta rota e voltar para "Em andamento"?', () => updateRouteStatus(id, status));
+      } else {
+        updateRouteStatus(id, status);
+      }
+    };
+    window.deleteDeliveryFromList = (id) => {
+      openConfirmDialog('Remover esta parada?', () => {
+        StorageManager.deleteDelivery(id);
+        renderRoutesList();
+        showToast('Parada removida');
+      });
+    };
+    window.openRouteModalFromList = (id) => openRouteModal(id);
+    window.deleteRouteFromList = (id) => {
+      openConfirmDialog('Deseja realmente excluir esta rota e todas as suas paradas? Esta aÃƒÂ§ÃƒÂ£o nÃƒÂ£o pode ser desfeita.', () => {
+        StorageManager.deleteRoute(id);
+        renderRoutesList();
+        refreshDashboard();
+        showToast('Rota excluÃƒÂ­da com sucesso');
+        if (activeRouteId === id) {
+          activeRouteId = null;
+          MapService.clearMap();
+          document.getElementById('routeDetailPanel').classList.remove('show');
+        }
+      });
+    };
+    window.viewOnMap = (id) => navigateToMap(id);
+    window.viewOnMapReadOnly = (id) => navigateToMap(id, true);
+
+    // --- DRAG AND DROP HANDLERS ---
+    window.handleStopDragStart = (e, deliveryId) => {
+      e.dataTransfer.setData('deliveryId', deliveryId);
+      e.target.classList.add('dragging');
+    };
+
+    window.handleStopDragEnd = (e) => {
+      e.target.classList.remove('dragging');
+      document.querySelectorAll('.stops-detail-list').forEach(l => l.classList.remove('drag-over'));
+    };
+
+    window.handleStopDragOver = (e) => {
+      e.preventDefault(); // Allow drop
+    };
+
+    window.handleStopDragEnter = (e) => {
+      const list = e.target.closest('.stops-detail-list');
+      if(list) list.classList.add('drag-over');
+    };
+
+    window.handleStopDragLeave = (e) => {
+      const list = e.target.closest('.stops-detail-list');
+      if(list) list.classList.remove('drag-over');
+    };
+
+    window.handleStopDrop = (e, targetRouteId, targetStopId = null) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const deliveryId = e.dataTransfer.getData('deliveryId');
+      if (!deliveryId) return;
+
+      const allDeliveries = StorageManager.getDeliveries();
+      const draggedDelivery = allDeliveries.find(d => d.id === deliveryId);
+      if (!draggedDelivery) return;
+
+      const sourceRouteId = draggedDelivery.routeId;
+      
+      // Get all stops of target route
+      let targetStops = StorageManager.getDeliveriesByRoute(targetRouteId)
+                          .sort((a, b) => a.order - b.order);
+
+      // Remove dragged stop from its current list (if it was already there)
+      targetStops = targetStops.filter(d => d.id !== deliveryId);
+
+      if (targetStopId) {
+        // Find index of target stop
+        const index = targetStops.findIndex(d => d.id === targetStopId);
+        // Insert before target stop
+        targetStops.splice(index, 0, draggedDelivery);
+      } else {
+        // Append to end
+        targetStops.push(draggedDelivery);
+      }
+
+      // Update all orders and routeId
+      targetStops.forEach((d, idx) => {
+        d.routeId = targetRouteId;
+        d.order = idx + 1;
+        StorageManager.saveDelivery(d);
+      });
+
+      // If moving between routes, re-order source route too
+      if (sourceRouteId !== targetRouteId) {
+        const sourceStops = StorageManager.getDeliveriesByRoute(sourceRouteId)
+                             .sort((a, b) => a.order - b.order);
+        sourceStops.forEach((d, idx) => {
+          d.order = idx + 1;
+          StorageManager.saveDelivery(d);
+        });
+      }
+      
+      renderRoutesList();
+      refreshDashboard();
+      
+      // Refresh map if active
+      if (activeRouteId === sourceRouteId || activeRouteId === targetRouteId) {
+        loadRouteToMap(activeRouteId);
+      }
+      
+      showToast('Ordem da rota atualizada');
+      document.querySelectorAll('.stops-detail-list').forEach(l => l.classList.remove('drag-over'));
+    };
+
+    window.printRoute = (routeId) => {
+      const route = StorageManager.getRoute(routeId);
+      const stops = StorageManager.getDeliveriesByRoute(routeId);
+      const driver = route.driverId ? (StorageManager.getDrivers().find(d => d.id === route.driverId) || StorageManager.getUsers().find(u => u.id === route.driverId)) : null;
+      
+      const printArea = document.getElementById('printArea');
+      
+      let stopsTableRows = stops.map((s, i) => `
+        <tr>
+          <td><span class="print-stop-index">${i + 1}</span></td>
+          <td>
+            <strong>${s.recipient}</strong><br>
+            <span style="font-size:10px; color:#666">CPF: ${s.cpf || '-'}</span>
+          </td>
+          <td>${s.phone || '-'}</td>
+          <td>${s.address || 'Sem endereÃƒÂ§o'}</td>
+          <td><div class="print-obs">${s.notes || '-'}</div></td>
+        </tr>
+      `).join(');
+
+      printArea.innerHTML = `
+        <div class="print-header">
+          <div class="print-title">LOGIC FRETE - RelatÃƒÂ³rio de Rota</div>
+          <div style="text-align:right; font-size:12px; color:#666">
+            Emitido em: ${new Date().toLocaleString('pt-BR')}<br>
+            ID Rota: ${route.id.split('-')[0]}
+          </div>
+        </div>
+
+        <div class="print-meta">
+          <div class="print-meta-item">
+            <span class="print-meta-label">Nome da Rota:</span> ${route.name}
+          </div>
+          <div class="print-meta-item">
+            <span class="print-meta-label">Data:</span> ${formatDate(route.date)}
+          </div>
+          <div class="print-meta-item">
+            <span class="print-meta-label">Motorista:</span> ${driver ? driver.name : 'NÃƒÂ£o atribuÃƒÂ­do'}
+          </div>
+          <div class="print-meta-item">
+            <span class="print-meta-label">Total Paradas:</span> ${stops.length}
+          </div>
+          <div class="print-meta-item" style="grid-column: 1 / -1">
+            <span class="print-meta-label">ObservaÃƒÂ§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes da Rota:</span> ${route.notes || 'Nenhuma'}
+          </div>
+        </div>
+
+        <table class="print-table">
+          <thead>
+            <tr>
+              <th style="width:30px">#</th>
+              <th>Cliente</th>
+              <th style="width:100px">Telefone</th>
+              <th>EndereÃƒÂ§o</th>
+              <th style="width:150px">ObservaÃƒÂ§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âµes</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${stopsTableRows}
+          </tbody>
+        </table>
+
+        <div style="margin-top:20px; border-top:1px solid #eee; padding-top:10px; font-size:9px; color:#999; text-align:center;">
+          Logic Frete ÃƒÂ­Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Sistema de GestÃƒÂ£o LogÃƒÂ­stica
+        </div>
+      `;
+
+      window.print();
+    };
+  
+    // Filter chips click
+    document.querySelectorAll('#mainRoutesView .filter-chips .chip').forEach(chip => {
+      chip.addEventListener('click', (e) => {
+        document.querySelectorAll('#mainRoutesView .filter-chips .chip').forEach(c => c.classList.remove('active'));
+        e.target.classList.add('active');
+        renderRoutesList();
+      });
+    });
+  
+    document.getElementById('searchRoutesMain')?.addEventListener('input', renderRoutesList);
+  
+    function renderDeliveriesList() {
+      const list = document.getElementById('deliveriesListMain');
+      if(!list) return;
+      const deliveries = StorageManager.getDeliveries();
+      const routes = StorageManager.getRoutes();
+      
+      const searchInput = document.getElementById('searchDeliveriesMain');
+      const q = searchInput ? searchInput.value.toLowerCase() : ';
+      let filtered = deliveries;
+      if (q) {
+        filtered = deliveries.filter(d => 
+          d.recipient.toLowerCase().includes(q) || 
+          (d.address && d.address.toLowerCase().includes(q))
+        );
+      }
+  
+      if (filtered.length === 0) {
+        list.innerHTML = `
+          <div class="empty-state" style="grid-column: 1 / -1">
+            <i class="ri-map-pin-line"></i>
+            <p>Nenhuma entrega encontrada</p>
+          </div>
+        `;
+        return;
+      }
+  
+      list.innerHTML = '
+      filtered.forEach(d => {
+        const route = routes.find(r => r.id === d.routeId);
+        const routeName = route ? route.name : 'Rota desconhecida';
+        const st = statusMap[d.status] || statusMap['pending'];
+  
+        const div = document.createElement('div');
+        div.className = 'task-card list-item';
+        div.innerHTML = `
+          <div class="task-header">
+            <div class="task-indicator ${d.status === 'delivered' ? 'delivered' : '}"></div>
+            <div class="task-title">${(d.recipient || 'SEM NOME').toUpperCase()}</div>
+          </div>
+          <div class="task-body">
+            <div class="task-row"><span class="task-label">NOME:</span> <span class="task-value">${d.recipient}</span></div>
+            <div class="task-row"><span class="task-label">CPF:</span> <span class="task-value">${d.cpf || '-'}</span></div>
+            <div class="task-row"><span class="task-label">TEL:</span> <span class="task-value">${d.phone || '-'}</span></div>
+            <div class="task-row"><span class="task-label">END:</span> <span class="task-value">${d.address || '-'}</span></div>
+            ${d.notes ? `<div class="task-notes">${d.notes}</div>` : '}
+          </div>
+          <div class="task-footer">
+            <div class="task-date"><i class="ri-calendar-line"></i> ${route ? formatDate(route.date) : '-'}</div>
+            <div class="details-actions">
+              ${window.appPermissions?.canEditRoute ? `<button class="btn-icon-xs" onclick="event.stopPropagation(); window.openDeliveryModalFromList('${d.id}')" title="Editar"><i class="ri-edit-line"></i></button>` : '}
+              <button class="btn-icon-xs" onclick="event.stopPropagation(); window.viewOnMap('${d.routeId}')" title="Ver no Mapa"><i class="ri-map-2-line"></i></button>
+            </div>
+          </div>
+        `;
+
+        div.addEventListener('click', () => {
+          const wasExpanded = div.classList.contains('expanded');
+          document.querySelectorAll('.list-item.expanded').forEach(item => item.classList.remove('expanded'));
+          if (!wasExpanded) {
+            div.classList.add('expanded');
+          }
+        });
+        list.appendChild(div);
+      });
+    }
+    document.getElementById('searchDeliveriesMain')?.addEventListener('input', renderDeliveriesList);
+  
+    function renderDriversList() {
+      const list = document.getElementById('driversListMain');
+      if(!list) return;
+      
+      const traditionalDrivers = StorageManager.getDrivers();
+      const userDrivers = StorageManager.getUsers().filter(u => u.role === 'Motorista');
+      
+      const combinedDrivers = [
+        ...traditionalDrivers.map(d => ({ ...d, isUser: false })),
+        ...userDrivers.map(u => ({ id: u.id, name: u.name, phone: u.phone || '-', isUser: true, username: u.username, vehicle: 'Consultar perfil', plate: '-' }))
+      ];
+      
+      if (combinedDrivers.length === 0) {
+        list.innerHTML = `<div class="empty-state" style="grid-column: 1 / -1"><i class="ri-user-star-line"></i><p>Nenhum motorista cadastrado</p></div>`;
+        return;
+      }
+  
+      list.innerHTML = '
+      combinedDrivers.forEach(d => {
+        const routes = StorageManager.getRoutes().filter(r => r.driverId === d.id).sort((a, b) => new Date(b.date) - new Date(a.date));
+        const routeCount = routes.length;
+        
+        // Calculate total KM for this driver
+        const totalKm = routes.reduce((sum, r) => sum + (parseFloat(String(r.distanceKm).replace(',', '.')) || 0), 0).toFixed(1);
+        
+        let historyHtml = routes.map(r => {
+          const st = statusMap[r.status] || statusMap['planned'];
+          const stopsCount = StorageManager.getDeliveriesByRoute(r.id).length;
+          return `
+            <div class="history-route-item" onclick="event.stopPropagation(); window.viewOnMapReadOnly('${r.id}')">
+              <div class="history-route-info">
+                <span class="history-route-name">${r.name}</span>
+                <span class="history-route-date"><i class="ri-calendar-event-line"></i> ${formatDate(r.date)} ÃƒÂ­Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ <i class="ri-map-pin-line"></i> ${stopsCount} paradas ÃƒÂ­Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ <i class="ri-map-2-line"></i> ${r.distanceKm || '0'} km</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:10px">
+                <span class="badge ${st.class}" style="font-size:0.5rem">${st.label}</span>
+                <i class="ri-arrow-right-s-line" style="color:var(--text-muted)"></i>
+              </div>
+            </div>
+          `;
+        }).join(');
+
+        if (routes.length === 0) {
+          historyHtml = '<p class="text-muted" style="font-size:0.8rem; padding: 10px 0;">Nenhuma rota realizada ainda.</p>';
+        }
+
+            <div class="task-indicator ${d.status === 'delivered' ? 'delivered' : '}"></div>
+            <div class="task-title">${(d.recipient || 'SEM NOME').toUpperCase()}</div>
+          </div>
+          <div class="task-body">
+            <div class="task-row"><span class="task-label">NOME:</span> <span class="task-value">${d.recipient}</span></div>
+            <div class="task-row"><span class="task-label">CPF:</span> <span class="task-value">${d.cpf || '-'}</span></div>
+            <div class="task-row"><span class="task-label">TEL:</span> <span class="task-value">${d.phone || '-'}</span></div>
+            <div class="task-row"><span class="task-label">END:</span> <span class="task-value">${d.address || '-'}</span></div>
+            ${d.notes ? `<div class="task-notes">${d.notes}</div>` : '}
+          </div>
+          <div class="task-footer">
+            <div class="task-date"><i class="ri-calendar-line"></i> ${route ? formatDate(route.date) : '-'}</div>
+            <div class="details-actions">
+              ${window.appPermissions?.canEditRoute ? `<button class="btn-icon-xs" onclick="event.stopPropagation(); window.openDeliveryModalFromList('${d.id}')" title="Editar"><i class="ri-edit-line"></i></button>` : '}
+              <button class="btn-icon-xs" onclick="event.stopPropagation(); window.viewOnMap('${d.routeId}')" title="Ver no Mapa"><i class="ri-map-2-line"></i></button>
+            </div>
+          </div>
+        `;
+
+        div.addEventListener('click', () => {
+          const wasExpanded = div.classList.contains('expanded');
+          document.querySelectorAll('.list-item.expanded').forEach(item => item.classList.remove('expanded'));
+          if (!wasExpanded) div.classList.add('expanded');
+        });
+        list.appendChild(div);
+      });
+    }
+  
+    // Expose these to window for the onclick handlers in strings
+    window.openDriverModalFromList = openDriverModal;
+    window.deleteDriverFromList = (id) => {
+      openConfirmDialog('Excluir motorista?', () => {
+        StorageManager.deleteDriver(id);
+        renderDriversList();
+        showToast('Motorista excluÃƒÂ­do');
+      });
+    };
+
+    // === USERS MODAL & LIST LOGIC ===
+    const modalUser = document.getElementById('modalUser');
+    let editingUserId = null;
+
+    function openUserModal(userId = null) {
+      editingUserId = userId;
+      const title = document.getElementById('modalUserTitle');
+      
+      if (userId) {
+        title.innerText = 'Editar UsuÃ¡rio';
+        const user = StorageManager.getUsers().find(u => u.id === userId);
+        document.getElementById('userName').value = user.name || ';
+        document.getElementById('userUsername').value = user.username || ';
+        document.getElementById('userPassword').value = user.password || ';
+        document.getElementById('userRole').value = user.role || 'Motorista';
+        
+        const perms = user.permissions || [];
+        document.getElementById('perm_view_route').checked = perms.includes('view_route');
+        document.getElementById('perm_edit_route').checked = perms.includes('edit_route');
+        document.getElementById('perm_reorder_stops').checked = perms.includes('reorder_stops');
+        document.getElementById('perm_edit_notes').checked = perms.includes('edit_notes');
+      } else {
+        title.innerText = 'Novo UsuÃ¡rio';
+        document.getElementById('userName').value = ';
+        document.getElementById('userUsername').value = ';
+        document.getElementById('userPassword').value = ';
+        document.getElementById('userRole').value = 'Motorista';
+        
+        document.getElementById('perm_view_route').checked = true;
+        document.getElementById('perm_edit_route').checked = false;
+        document.getElementById('perm_reorder_stops').checked = false;
+        document.getElementById('perm_edit_notes').checked = false;
+      }
+      modalUser.classList.add('active');
+    }
+
+    function closeUserModal() { modalUser.classList.remove('active'); }
+
+    document.getElementById('btnNewUserMain')?.addEventListener('click', () => openUserModal());
+    document.getElementById('closeModalUser')?.addEventListener('click', closeUserModal);
+    document.getElementById('cancelModalUser')?.addEventListener('click', closeUserModal);
+
+    document.getElementById('saveUser')?.addEventListener('click', async () => {
+      const name = document.getElementById('userName').value;
+      const userLogin = document.getElementById('userUsername').value;
+      const pass = document.getElementById('userPassword').value;
+      const role = document.getElementById('userRole').value;
+
+      if (!name || !userLogin || !pass) return showToast('Preencha todos os campos obrigatÃƒÂ³rios', 'error');
+
+      const permissions = [];
+      if (document.getElementById('perm_view_route').checked) permissions.push('view_route');
+      if (document.getElementById('perm_edit_route').checked) permissions.push('edit_route');
+      if (document.getElementById('perm_reorder_stops').checked) permissions.push('reorder_stops');
+      if (document.getElementById('perm_edit_notes').checked) permissions.push('edit_notes');
+
+      const userData = {
+        id: editingUserId,
+        name: name,
+        username: userLogin,
+        password: pass,
+        role: role,
+        permissions: permissions
+      };
+      
+      try {
+        await StorageManager.saveUser(userData);
+        showToast('UsuÃ¡rio salvo com sucesso!');
+        closeUserModal();
+        renderUsersList();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    });
+
+    window.openUserModalFromList = openUserModal;
+    window.deleteUserFromList = (id) => {
+      // Prevent deleting self or only admin
+      const currentUser = StorageManager.getCurrentUser();
+      if (currentUser && currentUser.id === id) {
+        return showToast('VocÃª nÃ£o pode excluir seu prÃ³prio usuÃ¡rio', 'error');
+      }
+      openConfirmDialog('Excluir este usuÃ¡rio?', () => {
+        StorageManager.deleteUser(id);
+        renderUsersList();
+        showToast('UsuÃ¡rio excluÃ­do');
+      });
+    };
+
+    function renderUsersList() {
+      const list = document.getElementById('usersListMain');
+      if(!list) return;
+      const users = StorageManager.getUsers();
+      
+      if (users.length === 0) {
+        list.innerHTML = `<div class="empty-state" style="grid-column: 1 / -1"><p>Nenhum usuário cadastrado</p></div>`;
+        return;
+      }
+
+      list.innerHTML = ';
+      users.forEach(u => {
+        const div = document.createElement('div');

@@ -1,0 +1,17 @@
+# Segredos — NUNCA commitar
+.env
+
+# Dependencias
+node_modules/
+
+# Banco local / logs
+data/
+*.log
+boot.log
+migboot.log
+
+# Sistema / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.gemini/

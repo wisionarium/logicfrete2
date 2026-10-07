@@ -1,0 +1,17 @@
+{
+  "name": "logic-frete",
+  "version": "1.0.0",
+  "description": "Gerenciador de Rotas de Entrega",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "db:info": "node scripts/db-info.js"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.18.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.3"
+  }
+}

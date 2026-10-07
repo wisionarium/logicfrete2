@@ -1,0 +1,1269 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="LOGIC FRETE" />
+  <meta name="theme-color" content="#0A192F" />
+  <title>LOGIC FRETE — Gerenciador de Rotas de Entrega</title>
+  <meta name="description" content="Gerencie rotas de entrega com pesquisa inteligente de endereços, cálculo de distâncias e visualização de mapas. Otimize suas entregas com o LOGIC FRETE." />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/icone-180.png" />
+  <link rel="apple-touch-icon" sizes="192x192" href="/icone-192.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/icone-192.png" />
+  <link rel="icon" type="image/png" sizes="512x512" href="/icone-512.png" />
+  <script>
+    (function() {
+      const savedTheme = localStorage.getItem('app_theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', savedTheme);
+      // Update theme-color meta tag dynamically if needed
+      const metaThemeColor = document.querySelector('meta[name="theme-color"]');
+      if (metaThemeColor) {
+        if (savedTheme === 'light') metaThemeColor.setAttribute('content', '#F8F9FA');
+        else if (savedTheme === 'classic') metaThemeColor.setAttribute('content', '#1E3A8A');
+        else metaThemeColor.setAttribute('content', '#0F172A'); // dark
+      }
+    })();
+  </script>
+
+  <!-- MapLibre GL JS -->
+  <script src="https://unpkg.com/maplibre-gl@^4.0.0/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@^4.0.0/dist/maplibre-gl.css" rel="stylesheet" />
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <!-- Remix Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/remixicon@4.2.0/fonts/remixicon.css" rel="stylesheet" />
+
+  <link rel="stylesheet" href="style.css?v=25.0" />
+  <script>
+    // Fast session check to avoid login flicker on refresh
+    (function() {
+      if (localStorage.getItem('logic_frete_session')) {
+        document.documentElement.classList.add('is-logged-in');
+      }
+    })();
+  </script>
+
+  <!-- ===== PROFILE DROPUP STYLES (inline — bypasses style.css issues) ===== -->
+  <style>
+    /* Avatar trigger button */
+    .pf-avatar-btn {
+      width: 42px; height: 42px;
+      border-radius: 50%;
+      border: 2.5px solid #00e676;
+      background: #0d1b2a;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden; padding: 0;
+      transition: box-shadow .22s, border-color .22s;
+      flex-shrink: 0;
+    }
+    .pf-avatar-btn:hover { box-shadow: 0 0 0 4px rgba(0,230,118,.18); border-color: #69f0ae; }
+    .pf-avatar-btn i  { font-size: 1.3rem; color: #7a8fa6; }
+    .pf-avatar-btn img { width:100%; height:100%; object-fit:cover; border-radius:50%; }
+
+    /* The floating menu panel — positioned via JS */
+    .pf-menu {
+      position: fixed;
+      width: 244px;
+      background: #0d1b2a;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 10px 40px rgba(0,0,0,.75);
+      z-index: 999999;
+      display: none;
+      flex-direction: column;
+      animation: pfSlideUp .18s cubic-bezier(.22,.68,0,1.2);
+    }
+    .pf-menu.pf-open { display: flex !important; }
+
+    @keyframes pfSlideUp {
+      from { opacity: 0; transform: translateY(10px) scale(.97); }
+      to   { opacity: 1; transform: translateY(0)  scale(1); }
+    }
+
+    /* Header */
+    .pf-header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 16px;
+      background: rgba(255,255,255,.03);
+    }
+    .pf-hdr-avatar {
+      width: 52px; height: 52px; border-radius: 50%;
+      border: 2px solid #00e676; background: #111f30;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden; flex-shrink: 0;
+    }
+    .pf-hdr-avatar i   { font-size: 1.5rem; color: #7a8fa6; }
+    .pf-hdr-avatar img { width:100%; height:100%; object-fit:cover; border-radius:50%; }
+    .pf-hdr-info { display:flex; flex-direction:column; gap:2px; min-width:0; }
+    .pf-hdr-name {
+      font-size: .95rem; font-weight: 800; color: #e8f0fe;
+      text-transform: uppercase; letter-spacing: .04em;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      max-width: 148px;
+    }
+    .pf-hdr-role { font-size: .7rem; color: #00e676; font-weight: 500; }
+
+    /* Separator */
+    .pf-sep { height: 1px; background: rgba(255,255,255,.07); }
+
+    /* Menu items */
+    .pf-item {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 18px;
+      width: 100%; background: transparent; border: none;
+      color: #b0bec5; font-size: .88rem; cursor: pointer;
+      text-align: left; transition: background .15s, color .15s;
+      font-family: inherit; box-sizing: border-box; text-decoration: none;
+    }
+    .pf-item:hover { background: rgba(255,255,255,.06); color: #e8f0fe; }
+    .pf-item i { font-size: 1.1rem; color: #5a7a9a; transition: color .15s; flex-shrink: 0; }
+    .pf-item:hover i { color: #00e676; }
+    .pf-item-logout { color: #ef5350; }
+    .pf-item-logout i { color: #ef5350; }
+    .pf-item-logout:hover { background: rgba(239,83,80,.1); color: #ff6b6b; }
+    .pf-item-logout:hover i { color: #ff6b6b; }
+
+    /* Sub-panel header (back nav) */
+    .pf-sub-head {
+      display: flex; align-items: center; gap: 8px;
+      padding: 12px 16px; background: rgba(255,255,255,.03);
+      font-size: .82rem; color: #7a8fa6;
+    }
+    .pf-back-btn {
+      background: none; border: none; color: #00e676; cursor: pointer;
+      font-size: .82rem; font-family: inherit; padding: 0;
+    }
+    .pf-back-btn:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+  <!-- ===================== LOGIN OVERLAY ===================== -->
+  <div class="login-overlay" id="loginOverlay">
+    <div class="login-card">
+      <div class="login-logo" style="display: flex; align-items: center; justify-content: center; gap: 15px;">
+        <div style="display: flex; align-items: center;">
+          <i class="ri-truck-line"></i>
+          <h2>LOGIC <span>FRETE</span></h2>
+        </div>
+        <div style="width: 1px; height: 45px; background: rgba(255,255,255,0.2);"></div>
+        <img src="supra-bike.png" alt="Supra Bike" style="height: 45px; object-fit: contain;">
+      </div>
+      <form id="loginForm" class="login-form">
+        <div class="form-group">
+          <label for="loginUser">Usuário</label>
+          <div class="input-with-icon">
+            <i class="ri-user-line"></i>
+            <input type="text" id="loginUser" name="loginUser" autocomplete="username" placeholder="Digite seu usuário" required />
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="loginPass">Senha</label>
+          <div class="input-with-icon">
+            <i class="ri-lock-line"></i>
+            <input type="password" id="loginPass" name="loginPass" autocomplete="current-password" placeholder="Digite sua senha" required />
+          </div>
+        </div>
+        <div id="loginError" class="login-error-message" style="display:none;">
+          <i class="ri-error-warning-line"></i> Usuário ou senha incorretos
+        </div>
+        <button type="submit" class="btn-primary btn-block">
+          Entrar
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Main App Wrapper (To hide before login) -->
+  <div id="mainAppWrapper" style="display: none; height: 100vh;">
+  
+  <!-- Mobile Header (Visible only on mobile) -->
+  <header class="mobile-header">
+    <div style="display:flex; align-items:center; gap:8px;">
+      <i class="ri-truck-line" style="color:var(--accent-primary); font-size:1.3rem;"></i>
+      <span style="font-weight:700; font-size:1rem; color:var(--text-white); letter-spacing:1px; white-space:nowrap;">LOGIC FRETE</span>
+      <div style="width: 1px; height: 20px; background: rgba(255,255,255,0.2); margin: 0 4px;"></div>
+      <img src="supra-bike.png" alt="Supra Bike" style="height: 24px; object-fit: contain;">
+    </div>
+    <button class="btn-logout-mobile" id="btnLogoutMobile">Sair</button>
+  </header>
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+  <!-- ===================== SIDEBAR ===================== -->
+  <aside class="sidebar" id="sidebar" style="position: relative;">
+    <div class="sidebar-header">
+      <div class="logo" style="display: flex; align-items: center; gap: 15px;">
+        <div style="display: flex; align-items: center;">
+          <div class="logo-icon">
+            <i class="ri-truck-line"></i>
+          </div>
+          <div class="logo-text">
+            <span class="logo-title">LOGIC</span>
+            <span class="logo-subtitle">FRETE</span>
+          </div>
+        </div>
+        <div style="width: 1px; height: 35px; background: rgba(255,255,255,0.2);"></div>
+        <img src="supra-bike.png" alt="Supra Bike" style="height: 35px; object-fit: contain;">
+      </div>
+      <button class="btn-icon collapse-btn" id="btnCollapseSidebar" title="Fechar Menu">
+        <i class="ri-close-line"></i>
+      </button>
+    </div>
+
+    <!-- Nav Tabs -->
+    <nav class="sidebar-nav" style="flex: 1; overflow-y: hidden; display: flex; flex-direction: column; padding-bottom: 60px;">
+      <button class="nav-tab active" id="tab-dashboard" data-tab="dashboard">
+        <i class="ri-dashboard-3-line"></i>
+        <span>Dashboard</span>
+      </button>
+      <button class="nav-tab" id="tab-routes" data-tab="routes">
+        <i class="ri-route-line"></i>
+        <span>Rotas de Entrega</span>
+      </button>
+      <button class="nav-tab" id="tab-my-routes" data-tab="my-routes" style="display: none;">
+        <i class="ri-steering-2-line"></i>
+        <span>Minhas Rotas</span>
+      </button>
+      <button class="nav-tab" id="tab-calendar" data-tab="calendar">
+        <i class="ri-calendar-todo-line"></i>
+        <span>Calendário</span>
+      </button>
+      <button class="nav-tab" id="tab-drivers" data-tab="drivers" style="display: none;">
+        <i class="ri-user-star-line"></i>
+        <span>Motoristas</span>
+      </button>
+      <button class="nav-tab" id="tab-vehicles" data-tab="vehicles" style="display: none;">
+        <i class="ri-car-line"></i>
+        <span>Veículos</span>
+      </button>
+      <button class="nav-tab" id="tab-users" data-tab="users" style="display: none;">
+        <i class="ri-shield-user-line"></i>
+        <span>Usuários</span>
+      </button>
+      <button class="nav-tab" id="tab-settings" data-tab="settings" style="display: none;">
+        <i class="ri-settings-3-line"></i>
+        <span>Configurações</span>
+      </button>
+      <div class="nav-divider"></div>
+      <button class="nav-tab" id="tab-map" data-tab="map">
+        <i class="ri-truck-fill" style="color:var(--accent-primary)"></i>
+        <span>Mapa</span>
+      </button>
+
+      <!-- Busca de CEP Rápida (Desktop only) -->
+      <div id="sidebarCepWidget" style="padding: 15px 20px; margin-top: 10px;">
+        <label style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600; margin-bottom: 6px; display: block; text-transform: uppercase; letter-spacing: 0.05em;">Buscar Cep:</label>
+        <div style="display: flex; flex-direction: column; gap: 5px;">
+          <input type="search" id="sidebarCepInput" autocomplete="new-password" data-lpignore="true" name="search_sidebar" placeholder="Somente números" style="background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color); color: var(--text-white); padding: 8px 10px; border-radius: 6px; outline: none; width: 100%; box-sizing: border-box; font-size: 0.85rem; font-family: var(--font-ui);" maxlength="9">
+          <div id="sidebarCepResult" style="font-size: 0.85rem; color: var(--accent-primary); display: none; margin-top: 4px; line-height: 1.3;"></div>
+        </div>
+      </div>
+    </nav>
+    <style>
+      /* Hide scrollbar for sidebar nav but keep functionality */
+      .sidebar-nav::-webkit-scrollbar {
+        display: none;
+      }
+      .sidebar-nav {
+        -ms-overflow-style: none;  /* IE and Edge */
+        scrollbar-width: none;  /* Firefox */
+      }
+    </style>
+
+
+    <!-- Sidebar Content -->
+    <div class="sidebar-content" style="display: none;">
+
+      <!-- ===== DASHBOARD TAB (Moved to main area) ===== -->
+      <div class="tab-panel active" id="panel-dashboard"></div>
+
+      <div class="tab-panel" id="panel-routes"></div>
+
+
+
+      <div class="tab-panel" id="panel-drivers"></div>
+      <div class="tab-panel" id="panel-users"></div>
+    </div><!-- end sidebar-content -->
+
+    <div class="sidebar-footer" style="position:absolute;bottom:0;left:0;right:0;padding:12px 16px;background:var(--bg-panel);border-top:1px solid var(--border-color);z-index:10;">
+
+      <!-- Profile Dropup Widget -->
+      <div id="profileDropupContainer">
+
+        <!-- Hidden file input -->
+        <input type="file" id="profilePhotoInput" accept="image/*" style="display:none;" />
+
+        <!-- Trigger: avatar circle button -->
+        <button id="profileAvatarBtn" class="pf-avatar-btn" title="Meu Perfil">
+          <i class="ri-user-line" id="profileAvatarIcon"></i>
+          <img id="profileAvatarImg" alt="Avatar" style="display:none;" />
+        </button>
+
+      </div>
+    </div>
+  </aside>
+
+  <!-- ===================== MAIN MAP AREA ===================== -->
+  <main class="map-area">
+
+    <!-- DASHBOARD VIEW (Formerly in sidebar) -->
+    <div class="main-dashboard-view" id="mainDashboardView">
+      <div class="main-panel-header">
+          <h1 class="main-panel-title" id="dashboardTitle">Painel de Controle</h1>
+          <span id="currentDateDisplay" style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 25px; display: block;"></span>
+      </div>
+
+      <div class="stats-grid-main">
+        <div class="stat-card" id="stat-routes-main" style="cursor: pointer; --clr:#00D4AA;">
+          <div class="stat-icon"><i class="ri-route-line"></i></div>
+          <div class="stat-info">
+            <span class="stat-value" id="stat-routes-val-main">0</span>
+            <span class="stat-label">Rotas Hoje</span>
+          </div>
+        </div>
+        <div class="stat-card" id="stat-pending-main" style="cursor: pointer; --clr:#FF6B35;">
+          <div class="stat-icon"><i class="ri-time-line"></i></div>
+          <div class="stat-info">
+            <span class="stat-value" id="stat-pending-val-main">0</span>
+            <span class="stat-label">Rotas Agendadas</span>
+            <span class="stat-label" id="stat-pending-stops-main" style="font-size: 0.75rem; margin-top: 4px; opacity: 0.8; font-weight: 500;">0 paradas agendadas</span>
+          </div>
+        </div>
+        <div class="stat-card" id="stat-done-main" style="cursor: pointer; --clr:#00D4AA;">
+          <div class="stat-icon"><i class="ri-checkbox-circle-line"></i></div>
+          <div class="stat-info">
+            <span class="stat-value" id="stat-done-val-main">0</span>
+            <span class="stat-label">Concluídas</span>
+          </div>
+        </div>
+        <div class="stat-card" id="stat-km-main" style="cursor: pointer; --clr:#7C3AED;">
+          <div class="stat-icon"><i class="ri-map-2-line"></i></div>
+          <div class="stat-info">
+            <span class="stat-value" id="stat-km-val-main">0</span>
+            <span class="stat-label">km Hoje</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="dashboard-content-grid">
+        <div class="dashboard-section">
+          <div class="section-header">
+            <span>Rotas em Andamento</span>
+          </div>
+          <div class="active-routes-list" id="activeRoutesListMain">
+            <div class="empty-state">
+              <i class="ri-route-line"></i>
+              <p>Nenhuma rota ativa</p>
+            </div>
+          </div>
+        </div>
+        
+        <div class="dashboard-section">
+          <div class="section-header">
+            <span>Desempenho Semanal (KM)</span>
+          </div>
+          <div class="weekly-chart-wrapper">
+             <div class="weekly-chart-bars" id="weeklyChartBars">
+                <!-- Bars will be injected here -->
+             </div>
+             <div class="weekly-chart-labels">
+                <span>Seg</span><span>Ter</span><span>Qua</span><span>Qui</span><span>Sex</span><span>Sab</span><span>Dom</span>
+             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ROUTES VIEW -->
+    <div class="main-panel-view" id="mainRoutesView" style="display:none">
+        <div class="main-panel-header" style="flex-wrap: wrap; gap: 15px;">
+          <h1 class="main-panel-title">Rotas de Entrega</h1>
+          
+          <div style="flex: 1; display: flex; gap: 10px; min-width: 300px; max-width: 600px; margin: 0 15px;" class="desktop-header-search">
+            <div class="search-box-main" style="flex: 1;">
+              <i class="ri-search-line"></i>
+              <input type="text" id="searchRoutesMain" placeholder="Buscar rota por nome, data ou modelo..." style="width: 100%;" />
+            </div>
+            <button class="btn-primary" id="btnSmartFit" title="Encaixe Inteligente" style="padding: 0 15px; height: 44px; display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+              <i class="ri-magic-line"></i> <span class="desktop-only">Encaixe Inteligente</span>
+            </button>
+          </div>
+
+          <div style="display: flex; gap: 10px; margin-left: auto;">
+            <button class="btn-primary" id="btnNewDeliveryMain" style="background-color: var(--accent-secondary); border-color: var(--accent-secondary);">
+              <i class="ri-add-line"></i> Nova Parada
+            </button>
+            <button class="btn-primary" id="btnNewRouteMain">
+              <i class="ri-add-line"></i> Nova Rota
+            </button>
+          </div>
+        </div>
+        <div class="main-panel-controls" style="justify-content: center;">
+          <div class="filter-chips" style="margin: 0 auto;">
+            <button class="chip active" data-filter="hoje">Hoje</button>
+            <button class="chip" data-filter="planned">Agendadas</button>
+            <button class="chip" data-filter="active">Em Andamento</button>
+            <button class="chip" data-filter="done">Concluídas recentemente</button>
+            <button class="chip" data-filter="closed">Fechadas</button>
+            <button class="chip" data-filter="pending">Pendentes</button>
+          </div>
+        </div>
+        <div class="main-grid-list" id="routesListMain"></div>
+      </div>
+
+    <!-- DRIVERS VIEW -->
+    <div class="main-panel-view" id="mainDriversView" style="display:none">
+      <div class="main-panel-header">
+        <h1 class="main-panel-title">Motoristas</h1>
+
+      </div>
+      <div class="main-grid-list" id="driversListMain"></div>
+    </div>
+
+    <!-- VEHICLES VIEW -->
+    <div class="main-panel-view" id="mainVehiclesView" style="display:none">
+      <div class="main-panel-header">
+        <h1 class="main-panel-title">Veículos & Manutenção</h1>
+        <button class="btn-primary" id="btnNewVehicleMain">
+          <i class="ri-add-line"></i> Novo Veículo
+        </button>
+      </div>
+      <div class="main-grid-list" id="vehiclesListMain"></div>
+    </div>
+
+    <!-- CALENDAR VIEW -->
+    <div class="main-panel-view" id="mainCalendarView" style="display:none; flex-direction: column;">
+      <div class="main-panel-header calendar-header-mobile">
+        <h1 class="main-panel-title">Calendário de Rotas</h1>
+        <div class="calendar-search-wrapper">
+          <div class="search-input-wrapper" style="width: 100%; max-width: 400px; margin: 0 15px;">
+            <input type="text" id="calendarSearchInput" placeholder="Buscar data, nome ou CPF..." autocomplete="off" style="width: 100%; padding-left: 15px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-white); padding-top: 8px; padding-bottom: 8px;">
+          </div>
+        </div>
+        <div class="calendar-nav-controls">
+          <button class="btn-secondary btn-sm" id="btnPrevWeek"><i class="ri-arrow-left-s-line"></i> Anterior</button>
+          <span id="calendarWeekDisplay" class="calendar-week-label">Semana Atual</span>
+          <button class="btn-secondary btn-sm" id="btnNextWeek">Próxima <i class="ri-arrow-right-s-line"></i></button>
+        </div>
+      </div>
+      <div class="calendar-kanban-board" id="calendarKanban">
+        <!-- Columns will be injected by JS -->
+      </div>
+    </div>
+
+    <!-- CALENDAR ROUTE POPUP -->
+    <div id="calRoutePopupOverlay" style="display:none; position:fixed; inset:0; z-index:3000; background:rgba(0,0,0,0.55); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); align-items:center; justify-content:center;" onclick="if(event.target===this) window.closeCalRoutePopup()">
+      <style>
+        .cal-popup-stop.expanded .cal-popup-stop-details { display: flex !important; flex-direction: column; gap: 4px; }
+        .cal-popup-stop.expanded .address-line { white-space: normal !important; overflow: visible !important; }
+        .cal-popup-stop:hover { background: rgba(255,255,255,0.08) !important; }
+      </style>
+      <div id="calRoutePopup" style="background:var(--bg-panel); border:1px solid var(--border-color); border-radius:18px; padding:0; width:min(480px,94vw); max-height:85vh; overflow-y:auto; box-shadow:0 24px 64px rgba(0,0,0,0.55); animation:popupIn .2s ease;">
+        <!-- header -->
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; padding:20px 20px 0;">
+          <div style="flex:1; min-width:0;">
+            <div id="calPopupBadgeWrap" style="margin-bottom:8px;"></div>
+            <h2 id="calPopupTitle" style="font-size:1.15rem; font-weight:700; color:var(--text-white); margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></h2>
+          </div>
+          <button onclick="window.closeCalRoutePopup()" style="background:none; border:none; color:var(--text-muted); font-size:1.4rem; cursor:pointer; padding:0 0 0 12px; line-height:1;"><i class="ri-close-line"></i></button>
+        </div>
+        <!-- stats bar -->
+        <div id="calPopupStats" style="display:flex; gap:6px; flex-wrap:wrap; padding:14px 20px 0;"></div>
+        <!-- meta info -->
+        <div id="calPopupMeta" style="padding:14px 20px 0; display:flex; flex-direction:column; gap:8px;"></div>
+        <!-- stops list -->
+        <div style="padding:14px 20px 0;">
+          <div style="font-size:0.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--text-muted); margin-bottom:8px;">Paradas</div>
+          <ol id="calPopupStopsList" style="list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:6px; max-height:200px; overflow-y:auto;"></ol>
+        </div>
+        <!-- actions -->
+        <div id="calPopupActions" style="display:flex; gap:8px; flex-wrap:wrap; padding:16px 20px 20px;"></div>
+      </div>
+    </div>
+
+    <!-- USERS VIEW -->
+    <div class="main-panel-view" id="mainUsersView" style="display:none">
+      <div class="main-panel-header">
+        <h1 class="main-panel-title">Gerenciar Usuários</h1>
+        <button class="btn-primary" id="btnNewUserMain">
+          <i class="ri-user-add-line"></i> Novo Usuário
+        </button>
+      </div>
+      <div class="main-grid-list" id="usersListMain"></div>
+    </div>
+
+    <!-- SETTINGS VIEW -->
+    <div class="main-panel-view" id="mainSettingsView" style="display:none">
+      <div class="main-panel-header">
+        <h1 class="main-panel-title">Configurações</h1>
+      </div>
+      <div class="modal-body" style="background: var(--surface-card); padding: 20px; border-radius: 12px; max-width: 600px; display: flex; flex-direction: column; gap: 20px;">
+        <div class="settings-menu-links" style="display: flex; flex-direction: column; gap: 10px;">
+          <button id="btnSettingsDrivers" class="btn-secondary" onclick="document.getElementById('tab-drivers').click()" style="justify-content: flex-start; padding: 15px;">
+            <i class="ri-user-star-line" style="font-size: 1.2rem; margin-right: 10px;"></i> Gerenciar Motoristas
+          </button>
+          <button id="btnSettingsVehicles" class="btn-secondary" onclick="document.getElementById('tab-vehicles').click()" style="justify-content: flex-start; padding: 15px;">
+            <i class="ri-car-line" style="font-size: 1.2rem; margin-right: 10px;"></i> Gerenciar Veículos
+          </button>
+          <button id="btnSettingsFreight" class="btn-secondary" onclick="document.getElementById('modalFreight').classList.add('active')" style="justify-content: flex-start; padding: 15px;">
+            <i class="ri-money-dollar-circle-line" style="font-size: 1.2rem; margin-right: 10px;"></i> Valor do frete
+          </button>
+          <button id="btnSettingsHistory" class="btn-secondary" style="justify-content: flex-start; padding: 15px;">
+            <i class="ri-history-line" style="font-size: 1.2rem; margin-right: 10px;"></i> Histórico de Rotas Concluídas
+          </button>
+          <button id="btnSettingsAuditLogs" class="btn-secondary" style="justify-content: flex-start; padding: 15px; display: none;">
+            <i class="ri-file-list-3-line" style="font-size: 1.2rem; margin-right: 10px;"></i> Histórico de Alterações
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MAIN PANEL VIEW: HISTÓRICO DE ROTAS ANTIGAS -->
+    <div class="main-panel-view" id="mainHistoricalRoutesView" style="display:none">
+      <div class="main-panel-header" style="display: flex; align-items: center; gap: 10px; position: relative;">
+        <button class="btn-icon" onclick="document.getElementById('tab-settings').click()" style="margin-left: -5px; flex-shrink: 0;">
+          <i class="ri-arrow-left-line"></i>
+        </button>
+        <h1 class="main-panel-title" style="flex: 1; text-align: center;">Histórico de Rotas Concluídas</h1>
+      </div>
+      <div style="padding: 0 20px 16px 20px; display: flex; gap: 10px; align-items: center;">
+        <button id="btnLoadHistoricalRoutes" class="btn-primary" style="white-space: nowrap; font-weight: bold; font-size: 0.9rem; padding: 10px 18px;">
+          <i class="ri-download-cloud-2-line"></i> Carregar Histórico
+        </button>
+        <div style="flex: 1; position: relative;">
+          <i class="ri-search-line" style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 1rem;"></i>
+          <input id="searchHistoricalRoutes" type="text" placeholder="Buscar rota por nome, motorista..." style="width: 100%; padding: 10px 12px 10px 34px; background: var(--surface-card); border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-main); font-size: 0.9rem; font-family: inherit;" oninput="window.filterHistoricalRoutes(this.value)">
+        </div>
+      </div>
+      <div style="flex: 1; overflow-y: auto; padding: 0 20px 20px 20px;">
+        <div id="historicalRoutesList" class="main-grid-list">
+          <!-- Resultados do histórico -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Map Controls Overlay (Floating) -->
+    <div class="map-controls-overlay" id="mapControlsOverlay" style="display:none">
+      <div class="map-extra-controls" style="display: flex; gap: 10px; margin-left: auto;">
+        <div class="map-style-wrapper">
+          <button class="btn-icon theme-btn" id="btnMapStyleIcon" title="Cores do Mapa" style="pointer-events: none;">
+            <i class="ri-map-2-line"></i>
+          </button>
+          <select id="mapStyleSelect">
+            <option value="light" selected>Claro</option>
+            <option value="dark">Escuro</option>
+            <option value="satellite">Satélite</option>
+            <option value="terrain">Relevo</option>
+          </select>
+        </div>
+        <button class="btn-icon theme-btn" id="btnTraffic" title="Tráfego">
+          <i class="ri-traffic-light-line"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- The Map -->
+    <div id="map"></div>
+
+    <!-- Route Detail Panel (shown when a route is selected) -->
+    <div class="route-detail-panel" id="routeDetailPanel">
+      <div class="rdp-header">
+        <div class="rdp-title-wrap">
+          <span class="rdp-badge" id="rdpBadge">Agendada</span>
+          <h2 class="rdp-title" id="rdpTitle">—</h2>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-icon" id="rdpMinimize" title="Minimizar para ver mapa"><i class="ri-subtract-line"></i></button>
+          <button class="btn-icon" id="rdpClose" title="Fechar painel"><i class="ri-close-line"></i></button>
+        </div>
+      </div>
+
+      <div class="rdp-meta" id="rdpMeta"></div>
+
+      <div class="rdp-stats">
+        <div class="rdp-stat">
+          <i class="ri-map-2-line"></i>
+          <span id="rdpDistance">— km</span>
+        </div>
+        <div class="rdp-stat">
+          <i class="ri-time-line"></i>
+          <span id="rdpDuration">— min</span>
+        </div>
+        <div class="rdp-stat">
+          <i class="ri-map-pin-line"></i>
+          <span id="rdpStops">0 paradas</span>
+        </div>
+      </div>
+
+      <div class="rdp-stops-wrap">
+        <div class="rdp-stops-header">
+          <span>Paradas</span>
+          <div class="rdp-stops-actions">
+            <button class="btn-add-small" id="rdpOptimize" title="Otimizar ordem das paradas">
+              <i class="ri-magic-line"></i> Otimizar
+            </button>
+            <button class="btn-add-small" id="rdpAddStop">
+              <i class="ri-add-line"></i> Adicionar
+            </button>
+          </div>
+        </div>
+        <ol class="rdp-stops-list" id="rdpStopsList"></ol>
+      </div>
+
+      <div class="rdp-actions">
+        <button class="btn-secondary" id="rdpEditBtn"><i class="ri-edit-line"></i> Editar</button>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ===================== MODAL: NOVA/EDITAR ROTA ===================== -->
+  <div class="modal-overlay" id="modalRoute">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modalRouteTitle">Nova Rota</h3>
+        <button class="btn-icon" id="closeModalRoute"><i class="ri-close-line"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="routeName">Nome da Rota *</label>
+          <input type="text" id="routeName" placeholder="Ex: Rota Centro - Manhã" />
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="routeDate">Data</label>
+            <input type="date" id="routeDate" />
+          </div>
+          <div class="form-group">
+            <label for="routeDriver">Motorista</label>
+            <select id="routeDriver">
+              <option value="">Sem motorista</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="routeOriginInput">Ponto de Partida *</label>
+          <div class="address-input-wrap" id="originWrap">
+            <i class="ri-map-pin-2-line pin-origin"></i>
+            <input type="text" id="routeOriginInput" placeholder="Endereço ou CEP..." autocomplete="off" />
+            <button type="button" class="btn-cep-inside" id="btnSearchCepOrigin" title="Buscar por CEP">
+              <i class="ri-search-line"></i>
+            </button>
+            <div class="address-suggestions" id="originSuggestions"></div>
+          </div>
+          <input type="hidden" id="routeOriginLat" />
+          <input type="hidden" id="routeOriginLng" />
+          <input type="hidden" id="routeOriginAddr" />
+        </div>
+        <div class="form-group">
+          <label for="routePix">Chave PIX</label>
+          <input type="text" id="routePix" list="pixSuggestions" placeholder="00.000.000/00000-00 - Loja" />
+          <datalist id="pixSuggestions">
+            <option value="07.870.286/0001-05 - EMANUEL"></option>
+            <option value="52.539.304/0001-25 - ASA BIKE LTDA"></option>
+            <option value="17.228.182/0001-55 - SUPRA BIKE"></option>
+            <option value="46.716.134/0001-04 - VMS BIKE"></option>
+          </datalist>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="routeVehicle">Veículo</label>
+            <select id="routeVehicle">
+              <option value="">Selecione um veículo</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="routePlate">Placa</label>
+            <input type="text" id="routePlate" placeholder="ABC-1234" readonly style="background: rgba(255,255,255,0.05); color: var(--text-muted);" />
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="cancelModalRoute">Cancelar</button>
+        <button class="btn-primary" id="saveRoute">
+          <i class="ri-save-line"></i> Salvar Rota
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== MODAL: NOVA/EDITAR PARADA ===================== -->
+  <div class="modal-overlay" id="modalDelivery">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modalDeliveryTitle">Nova Parada</h3>
+        <button class="btn-icon" id="closeModalDelivery"><i class="ri-close-line"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="deliveryRoute">Rota *</label>
+          <select id="deliveryRoute">
+            <option value="">Selecione uma rota...</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="deliveryRecipient">Cliente *</label>
+            <input type="text" id="deliveryRecipient" placeholder="Nome do Cliente" />
+          </div>
+          <div class="form-group">
+            <label for="deliveryCpf">CPF/CNPJ</label>
+            <input type="text" id="deliveryCpf" placeholder="Digite CPF ou CNPJ" />
+          </div>
+          <div class="form-group">
+            <label for="deliveryPhone">Telefone</label>
+            <input type="tel" id="deliveryPhone" placeholder="(00) 00000-0000" />
+          </div>
+          <div class="form-group">
+            <label for="deliveryModel">Modelo</label>
+            <input type="text" id="deliveryModel" placeholder="Ex: Tazzo, Jet..." />
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="deliveryAddressInput">Endereço de Entrega *</label>
+          <div class="address-input-wrap" id="deliveryAddrWrap">
+            <i class="ri-map-pin-line pin-stop"></i>
+            <input type="text" id="deliveryAddressInput" placeholder="Endereço ou CEP..." autocomplete="off" />
+            <button type="button" class="btn-cep-inside" id="btnSearchCepDelivery" title="Buscar por CEP">
+              <i class="ri-search-line"></i>
+            </button>
+            <div class="address-suggestions" id="deliverySuggestions"></div>
+          </div>
+          <input type="hidden" id="deliveryLat" />
+          <input type="hidden" id="deliveryLng" />
+          <input type="hidden" id="deliveryAddr" />
+          <input type="hidden" id="deliveryCepValue" />
+        </div>
+        <div class="form-group">
+          <label for="deliveryReference">Ponto de referência</label>
+          <input type="text" id="deliveryReference" placeholder="Ex: Próximo ao mercado..." autocomplete="off" />
+        </div>
+        <div class="form-row form-row-3">
+          <div class="form-group">
+            <label for="deliveryOrder">Ordem</label>
+            <input type="number" id="deliveryOrder" min="1" max="6" value="1" />
+          </div>
+          <div class="form-group">
+            <label for="deliveryStatus">Status</label>
+            <select id="deliveryStatus">
+              <option value="pending">Pendente</option>
+              <option value="in_route">Em rota</option>
+              <option value="delivered">Entregue</option>
+              <option value="failed">Falha</option>
+              <option value="rescheduled">Reagendado</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="deliveryNotes">Observações</label>
+          <textarea id="deliveryNotes" rows="2" placeholder="Instruções de entrega, ponto de referência..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="cancelModalDelivery">Cancelar</button>
+        <button class="btn-primary" id="saveDelivery">
+          <i class="ri-save-line"></i> Salvar Parada
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== MODAL: MOTORISTA ===================== -->
+  <div class="modal-overlay" id="modalDriver">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h3 id="modalDriverTitle">Novo Motorista</h3>
+        <button class="btn-icon" id="closeModalDriver"><i class="ri-close-line"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="driverName">Nome Completo *</label>
+          <input type="text" id="driverName" placeholder="Nome do motorista" />
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="driverPhone">Telefone</label>
+            <input type="tel" id="driverPhone" placeholder="(00) 00000-0000" />
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="cancelModalDriver">Cancelar</button>
+        <button class="btn-primary" id="saveDriver">
+          <i class="ri-save-line"></i> Salvar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== MODAL: USUÁRIO ===================== -->
+  <div class="modal-overlay" id="modalUser">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modalUserTitle">Novo Usuário</h3>
+        <button class="btn-icon" id="closeModalUser"><i class="ri-close-line"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="userName">Nome Completo *</label>
+          <input type="text" id="userName" placeholder="Nome do usuário" />
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="userUsername">Usuário (Login) *</label>
+            <input type="text" id="userUsername" placeholder="Ex: joao.silva" />
+          </div>
+          <div class="form-group">
+            <label for="userPassword">Senha *</label>
+            <input type="password" id="userPassword" placeholder="******" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="userRole">Nível de Acesso *</label>
+          <select id="userRole">
+            <option value="Motorista">Motorista</option>
+            <option value="Vendedor">Vendedor</option>
+            <option value="Gerente">Gerente</option>
+            <option value="Master">MASTER</option>
+          </select>
+        </div>
+        
+        <div class="form-group" id="permissionsGroup">
+          <label>Permissões</label>
+          <div class="permissions-grid">
+            <label class="checkbox-label">
+              <input type="checkbox" id="perm_view_route" checked>
+              <span>Visualizar Rota</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="perm_edit_route">
+              <span>Editar/Criar Rota</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="perm_reorder_stops">
+              <span>Reorganizar Ordem de Paradas</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="perm_edit_notes">
+              <span>Escrever nas Observações</span>
+            </label>
+          </div>
+          <small class="text-muted" style="display:block; margin-top:8px;">* Usuários MASTER têm todas as permissões ativas por padrão.</small>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="cancelModalUser">Cancelar</button>
+        <button class="btn-primary" id="saveUser">
+          <i class="ri-save-line"></i> Salvar Usuário
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== MODAL: VEÍCULO ===================== -->
+  <div class="modal-overlay" id="modalVehicle">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modalVehicleTitle">Novo Veículo</h3>
+        <button class="btn-icon" id="closeModalVehicle"><i class="ri-close-line"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="vehicleName">Nome/Modelo *</label>
+            <input type="text" id="vehicleName" placeholder="Ex: Fiat Fiorino" />
+          </div>
+          <div class="form-group">
+            <label for="vehiclePlate">Placa *</label>
+            <input type="text" id="vehiclePlate" placeholder="ABC-1234" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="vehicleCurrentKm">KM Atual</label>
+            <input type="number" id="vehicleCurrentKm" placeholder="0" />
+          </div>
+          <div class="form-group">
+            <label for="vehiclePlanKm">Próxima Revisão (KM)</label>
+            <input type="number" id="vehiclePlanKm" placeholder="Ex: 10000" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="vehicleIntervalKm">Intervalo de Revisão (KM)</label>
+            <input type="number" id="vehicleIntervalKm" placeholder="Ex: 10000" />
+          </div>
+          <div class="form-group">
+            <label for="vehicleMaintType">Tipo de Manutenção</label>
+            <input type="text" id="vehicleMaintType" placeholder="Ex: Troca de Óleo" />
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="cancelModalVehicle">Cancelar</button>
+        <button class="btn-primary" id="saveVehicle">
+          <i class="ri-save-line"></i> Salvar Veículo
+        </button>
+      </div>
+    </div>
+  </div>
+
+
+
+  <!-- ===================== MODAL: FRETE ===================== -->
+  <div class="modal-overlay" id="modalFreight">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modalFreightTitle">Valor do Frete</h3>
+        <button class="btn-icon" id="closeModalFreight"><i class="ri-close-line"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="settingFreightKm">Valor do Frete por KM Rodado (R$)</label>
+          <input type="number" id="settingFreightKm" placeholder="Ex: 2.50" step="0.01" />
+        </div>
+      </div>
+      <div class="modal-footer" style="justify-content: flex-end;">
+        <button class="btn-secondary" id="cancelModalFreight">Cancelar</button>
+        <button class="btn-primary" id="btnSaveSettings">
+          <i class="ri-save-line"></i> Salvar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Audit Logs -->
+  <div class="modal-overlay" id="modalAuditLogs">
+    <div class="modal" style="max-width: 700px; width: 95%;">
+      <div class="modal-header">
+        <h3 id="modalAuditLogsTitle"><i class="ri-history-line"></i> Histórico de Alterações</h3>
+        <button class="btn-icon" id="closeModalAuditLogs"><i class="ri-close-line"></i></button>
+      </div>
+      <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th style="width: 140px;">Data/Hora</th>
+                <th style="width: 120px;">Usuário</th>
+                <th style="width: 100px;">Ação</th>
+                <th>Detalhes</th>
+              </tr>
+            </thead>
+            <tbody id="auditLogsTableBody">
+              <!-- Logs rendered here -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer" style="justify-content: flex-end;">
+        <button class="btn-secondary" id="cancelModalAuditLogs">Fechar</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ===================== TOAST NOTIFICATIONS ===================== -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- ===================== CONFIRM DIALOG ===================== -->
+  <div class="modal-overlay" id="confirmDialog" style="display:none">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h3><i class="ri-error-warning-line" style="color:#FF6B35"></i> Confirmar Ação</h3>
+      </div>
+      <div class="modal-body">
+        <p id="confirmMessage">Tem certeza?</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="confirmCancel">Cancelar</button>
+        <button class="btn-danger" id="confirmOk">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== MOBILE BOTTOM NAVIGATION ===================== -->
+  <nav class="mobile-bottom-nav" id="mobileBottomNav">
+    <button class="mobile-nav-item active" data-tab="dashboard" id="mbn-dashboard">
+      <i class="ri-dashboard-3-line"></i>
+      <span>Painel</span>
+    </button>
+    <button class="mobile-nav-item" data-tab="routes" id="mbn-routes">
+      <i class="ri-route-line"></i>
+      <span>Rotas</span>
+    </button>
+    <button class="mobile-nav-item" data-tab="my-routes" id="mbn-my-routes" style="display: none;">
+      <i class="ri-steering-2-line"></i>
+      <span>Minhas Rotas</span>
+    </button>
+    <button class="mobile-nav-item" data-tab="calendar" id="mbn-calendar">
+      <i class="ri-calendar-todo-line"></i>
+      <span>Agenda</span>
+    </button>
+    <button class="mobile-nav-item" data-tab="map" id="mbn-map">
+      <i class="ri-truck-fill"></i>
+      <span>Mapa</span>
+    </button>
+    <button class="mobile-nav-item" data-tab="settings" id="mbn-settings">
+      <i class="ri-settings-3-line"></i>
+      <span>Config.</span>
+    </button>
+  </nav>
+
+  </div> <!-- End Main App Wrapper -->
+
+  <!-- ===== iOS PWA install banner + help modal (só aparece no iPhone/iPad fora do standalone) ===== -->
+  <div id="iosInstallBanner" style="display:none; position:fixed; left:12px; right:12px; bottom:76px; z-index:2500; background:#0d1b2a; border:1px solid rgba(0,230,118,.35); border-radius:14px; padding:12px 14px; box-shadow:0 10px 40px rgba(0,0,0,.5); align-items:center; gap:12px;">
+    <img src="/icone-192.png" alt="LOGIC FRETE" style="width:44px; height:44px; border-radius:10px; flex-shrink:0;" />
+    <div style="flex:1; min-width:0;">
+      <div style="color:#e8f0fe; font-weight:700; font-size:.88rem;">Instalar LOGIC FRETE</div>
+      <div style="color:#7a8fa6; font-size:.78rem;">Toque para ver como adicionar à Tela de Início no iPhone.</div>
+    </div>
+    <button id="iosInstallOpenBtn" style="background:#00e676; color:#0a1628; border:none; border-radius:8px; padding:9px 12px; font-weight:700; font-size:.82rem; cursor:pointer; flex-shrink:0;">Instalar</button>
+    <button id="iosInstallDismissBtn" aria-label="Fechar" style="background:none; border:none; color:#7a8fa6; font-size:1.1rem; cursor:pointer; padding:4px; flex-shrink:0;"><i class="ri-close-line"></i></button>
+  </div>
+
+  <div id="iosInstallModal" style="display:none; position:fixed; inset:0; z-index:3001; background:rgba(0,0,0,.6); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); align-items:center; justify-content:center; padding:16px;">
+    <div style="background:var(--bg-panel, #0d1b2a); border:1px solid rgba(255,255,255,.1); border-radius:18px; width:min(420px,94vw); padding:20px; box-shadow:0 24px 64px rgba(0,0,0,.55);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h2 style="font-size:1.05rem; color:#e8f0fe; margin:0;">Instalar no iPhone</h2>
+        <button id="iosInstallCloseBtn" style="background:none; border:none; color:#7a8fa6; font-size:1.3rem; cursor:pointer;"><i class="ri-close-line"></i></button>
+      </div>
+      <p style="color:#7a8fa6; font-size:.85rem; margin:0 0 14px; line-height:1.5;">O iPhone não mostra botão automático de instalação. Siga estes 3 passos no <strong style="color:#e8f0fe;">Safari</strong>:</p>
+      <ol style="color:#b0bec5; font-size:.88rem; line-height:1.7; margin:0 0 14px; padding-left:20px;">
+        <li>Toque em <strong style="color:#e8f0fe;">Compartilhar</strong> <i class="ri-share-line" style="color:#00e676;"></i> (barra inferior do Safari).</li>
+        <li>Role e toque em <strong style="color:#e8f0fe;">Adicionar à Tela de Início</strong>.</li>
+        <li>Confirme em <strong style="color:#e8f0fe;">Adicionar</strong> no topo.</li>
+      </ol>
+      <div style="background:rgba(0,230,118,.08); border:1px solid rgba(0,230,118,.25); border-radius:10px; padding:10px 12px; font-size:.78rem; color:#7a8fa6; line-height:1.5;">Depois abra pelo ícone <strong style="color:#e8f0fe;">LOGIC FRETE</strong> na Tela de Início para usar em tela cheia e com acesso offline.</div>
+      <button id="iosInstallOkBtn" style="margin-top:14px; width:100%; background:#00e676; color:#0a1628; border:none; border-radius:8px; padding:10px; font-weight:700; cursor:pointer;">Entendi</button>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      function isIos() {
+        return /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      }
+      function isInStandalone() {
+        return window.navigator.standalone === true ||
+          window.matchMedia('(display-mode: standalone)').matches ||
+          document.documentElement.classList.contains('is-standalone');
+      }
+      function isSafari() {
+        var ua = navigator.userAgent;
+        var isCriOS = /CriOS/i.test(ua);
+        var isFxiOS = /FxiOS/i.test(ua);
+        var isEdgiOS = /EdgiOS/i.test(ua);
+        return /Safari/i.test(ua) && !isCriOS && !isFxiOS && !isEdgiOS;
+      }
+      document.addEventListener('DOMContentLoaded', function () {
+        try {
+          if (sessionStorage.getItem('ios_install_dismissed') === '1') return;
+          if (!isIos() || isInStandalone()) return;
+          var banner = document.getElementById('iosInstallBanner');
+          var modal = document.getElementById('iosInstallModal');
+          if (!banner || !modal) return;
+          banner.style.display = 'flex';
+          if (!isSafari()) {
+            var sub = banner.querySelector('div div:last-child, div:nth-child(2) div:last-child');
+          }
+          function openModal() { modal.style.display = 'flex'; }
+          function closeModal() { modal.style.display = 'none'; }
+          function dismiss() {
+            banner.style.display = 'none';
+            try { sessionStorage.setItem('ios_install_dismissed', '1'); } catch (e) {}
+          }
+          document.getElementById('iosInstallOpenBtn').addEventListener('click', openModal);
+          document.getElementById('iosInstallCloseBtn').addEventListener('click', closeModal);
+          document.getElementById('iosInstallOkBtn').addEventListener('click', closeModal);
+          document.getElementById('iosInstallDismissBtn').addEventListener('click', dismiss);
+          modal.addEventListener('click', function (e) { if (e.target === modal) closeModal(); });
+        } catch (e) { /* nunca quebrar o app por causa do banner */ }
+      });
+    })();
+  </script>
+
+  <!-- Print Area (Hidden during normal use, used only for print layout) -->
+  <div id="printArea"></div>
+
+  <!-- Smart Fit Modal -->
+  <div class="modal-overlay" id="modalSmartFit">
+    <div class="modal" style="max-width: 500px;">
+      <div class="modal-header">
+        <h2>Encaixe Inteligente</h2>
+        <button class="btn-icon close-modal" id="closeModalSmartFit"><i class="ri-close-line"></i></button>
+      </div>
+      <div class="modal-body">
+        <p style="margin-bottom: 10px; font-size: 0.9rem; color: var(--text-muted);">
+          Digite o endereço ou CEP da nova parada. O sistema calculará qual das rotas existentes (ativas ou agendadas) passa mais perto desse local.
+        </p>
+        <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 15px; background: rgba(255,255,255,0.03); padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); line-height: 1.5;">
+          <div><span style="color: #22c55e; font-weight: 600;">1ª Fundo verde 🟢</span> - Melhor opção para sua pesquisa.</div>
+          <div><span style="color: #38bdf8; font-weight: 600;">2ª Fundo azul claro 🔵</span> - Boa opção para sua pesquisa.</div>
+          <div><span style="color: #facc15; font-weight: 600;">3ª Fundo amarelo 🟡</span> - Analíse melhor.</div>
+        </div>
+        <div class="form-group">
+          <label>Endereço / CEP</label>
+          <div style="display: flex; gap: 10px;">
+            <input type="text" id="smartFitInput" placeholder="Ex: Av Paulista 1000, SP" style="flex: 1;" />
+            <button class="btn-primary" id="btnRunSmartFit"><i class="ri-search-line"></i> Buscar</button>
+          </div>
+        </div>
+        <div id="smartFitResults" style="margin-top: 20px; display: flex; flex-direction: column; gap: 10px;">
+          <!-- Results will be injected here -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Failure Reason -->
+  <div class="modal-overlay" id="modalFailureReason">
+    <div class="modal" style="max-width: 400px;">
+      <div class="modal-header">
+        <h2>Motivo da Falha</h2>
+        <button class="btn-icon close-modal" id="closeModalFailureReason"><i class="ri-close-line"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Descreva o motivo da falha:</label>
+          <textarea id="failureReasonInput" rows="3" placeholder="Ex: Cliente ausente, endereço não encontrado..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary close-modal" id="cancelFailureReasonBtn">Cancelar</button>
+        <button class="btn-primary" id="confirmFailureReasonBtn">Confirmar Falha</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Backend local (Postgres localhost via /api) -->
+  <script src="data.js?v=27.0-auth"></script>
+  <script src="maps.js?v=26.0-local"></script>
+  <script src="app.js?v=26.0-local"></script>
+  <script src="tracking.js?v=1.0-track"></script>
+
+  <!-- Profile menus — rendered at body level to escape sidebar transform context -->
+  <div id="profileDropupMenu" class="pf-menu">
+    <div class="pf-header">
+      <div class="pf-hdr-avatar">
+        <i class="ri-user-3-line" id="pdmAvatarIcon"></i>
+        <img id="pdmAvatarImg" alt="" style="display:none;" />
+      </div>
+      <div class="pf-hdr-info">
+        <span class="pf-hdr-name" id="pdmUsername">Carregando...</span>
+        <span class="pf-hdr-role" id="pdmRole"></span>
+      </div>
+    </div>
+    <div class="pf-sep"></div>
+    <button class="pf-item" id="btnPdmMyProfile">
+      <i class="ri-user-3-line"></i>
+      <span>Meu Perfil</span>
+    </button>
+    <button class="pf-item" id="btnPdmAppearance">
+      <i class="ri-palette-line"></i>
+      <span>Aparência</span>
+    </button>
+    <div class="pf-sep"></div>
+    <button class="pf-item pf-item-logout" id="btnProfileLogout">
+      <i class="ri-logout-box-r-line"></i>
+      <span>Sair</span>
+    </button>
+  </div>
+
+  <div id="pdmSubProfile" class="pf-menu">
+    <div class="pf-sub-head">
+      <button class="pf-back-btn" id="btnPdmBackFromProfile">← Voltar</button>
+      <span>Meu Perfil</span>
+    </div>
+    <div class="pf-sep"></div>
+    <div style="padding:14px 16px;">
+
+      <!-- Avatar + change photo -->
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;">
+        <div id="pdmSubAvatarWrap" style="width:56px;height:56px;border-radius:50%;border:2px solid #00e676;background:#111f30;display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;cursor:pointer;" onclick="document.getElementById('profilePhotoInput').click()" title="Alterar foto">
+          <i class="ri-user-3-line" id="pdmSubAvatarIcon" style="font-size:1.6rem;color:#7a8fa6;"></i>
+          <img id="pdmSubAvatarImg" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%;" />
+        </div>
+        <label for="profilePhotoInput" style="font-size:0.8rem;color:#00e676;cursor:pointer;font-weight:600;line-height:1.4;">
+          <i class="ri-camera-line" style="margin-right:4px;"></i>Alterar Foto
+        </label>
+      </div>
+
+      <!-- Name edit -->
+      <label style="font-size:0.75rem;color:#5a7a9a;font-weight:600;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:6px;">Nome de exibição</label>
+      <input type="text" id="profileNameInput" placeholder="Seu nome..." style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.06);border:1px solid rgba(0,230,118,.3);border-radius:8px;color:#e8f0fe;padding:8px 10px;font-size:.88rem;font-family:inherit;outline:none;" />
+      <button id="btnSaveProfileName" style="margin-top:10px;width:100%;background:#00e676;color:#0a1628;border:none;border-radius:8px;padding:9px;font-size:.86rem;font-weight:700;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:6px;">
+        <i class="ri-save-line"></i> Salvar
+      </button>
+    </div>
+  </div>
+
+  <div id="pdmSubAppearance" class="pf-menu">
+    <div class="pf-sub-head">
+      <button class="pf-back-btn" id="btnPdmBackFromAppearance">← Voltar</button>
+      <span>Aparência</span>
+    </div>
+    <div class="pf-sep"></div>
+    <div style="padding:14px 16px;">
+      <!-- Theme Options -->
+      <label style="font-size:0.75rem;color:#5a7a9a;font-weight:600;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:10px;">Tema Visual</label>
+      <div style="display:flex;gap:10px;margin-bottom:20px;">
+        <button class="bg-theme-opt" data-theme="dark" style="flex:1;background:#0F172A;color:#FFFFFF;border:2px solid rgba(148, 163, 184, 0.3);padding:8px;border-radius:6px;cursor:pointer;font-size:0.8rem;transition:all 0.3s;font-weight:600;">Escuro</button>
+        <button class="bg-theme-opt" data-theme="light" style="flex:1;background:#F3F4F6;color:#000000;border:2px solid rgba(0,0,0,0.2);padding:8px;border-radius:6px;cursor:pointer;font-size:0.8rem;transition:all 0.3s;font-weight:600;">Claro</button>
+        <button class="bg-theme-opt" data-theme="classic" style="flex:1;background:#E2E8F0;color:#0F172A;border:2px solid rgba(15,23,42,0.2);padding:8px;border-radius:6px;cursor:pointer;font-size:0.8rem;transition:all 0.3s;font-weight:600;">Clássico</button>
+      </div>
+
+      <!-- Color Options -->
+      <label style="font-size:0.75rem;color:#5a7a9a;font-weight:600;text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:10px;">Cor Destaque</label>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;">
+        <div class="color-theme-opt" data-color="#00D4AA" data-hover="#00E6B8" style="width:36px;height:36px;border-radius:50%;background:#00D4AA;cursor:pointer;border:2px solid transparent;transition:0.2s;" title="Verde Elétrico (Padrão)"></div>
+        <div class="color-theme-opt" data-color="#3B82F6" data-hover="#60A5FA" style="width:36px;height:36px;border-radius:50%;background:#3B82F6;cursor:pointer;border:2px solid transparent;transition:0.2s;" title="Azul"></div>
+        <div class="color-theme-opt" data-color="#8B5CF6" data-hover="#A78BFA" style="width:36px;height:36px;border-radius:50%;background:#8B5CF6;cursor:pointer;border:2px solid transparent;transition:0.2s;" title="Roxo"></div>
+        <div class="color-theme-opt" data-color="#EF4444" data-hover="#F87171" style="width:36px;height:36px;border-radius:50%;background:#EF4444;cursor:pointer;border:2px solid transparent;transition:0.2s;" title="Vermelho"></div>
+        <div class="color-theme-opt" data-color="#F59E0B" data-hover="#FBBF24" style="width:36px;height:36px;border-radius:50%;background:#F59E0B;cursor:pointer;border:2px solid transparent;transition:0.2s;" title="Laranja"></div>
+        <div class="color-theme-opt" data-color="#EC4899" data-hover="#F472B6" style="width:36px;height:36px;border-radius:50%;background:#EC4899;cursor:pointer;border:2px solid transparent;transition:0.2s;" title="Rosa"></div>
+      </div>
+    </div>
+  </div>
+
+
+
+  <div id="pdmSubLogout" class="pf-menu">
+    <div style="padding:18px 16px;text-align:center;">
+      <i class="ri-logout-box-r-line" style="font-size:2rem;color:#ef5350;display:block;margin-bottom:8px;"></i>
+      <p style="color:#b0bec5;font-size:.9rem;margin:0 0 16px;">Deseja realmente sair?</p>
+      <button id="btnConfirmLogout" style="width:100%;background:#ef5350;color:#fff;border:none;border-radius:8px;padding:9px;font-size:.86rem;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:8px;">Sair</button>
+      <button id="btnCancelLogout" style="width:100%;background:rgba(255,255,255,.07);color:#b0bec5;border:none;border-radius:8px;padding:9px;font-size:.86rem;cursor:pointer;font-family:inherit;">Cancelar</button>
+    </div>
+  </div>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' })
+          .then((reg) => console.log('Service Worker registrado com sucesso:', reg.scope))
+          .catch((err) => console.log('Falha ao registrar Service Worker:', err));
+      });
+    }
+    // Detecta modo standalone (iOS usa navigator.standalone, outros usam display-mode)
+    window.__isStandalonePWA = (function () {
+      return window.navigator.standalone === true ||
+        window.matchMedia('(display-mode: standalone)').matches;
+    })();
+    if (window.__isStandalonePWA) {
+      document.documentElement.classList.add('is-standalone');
+    }
+  </script>
+</body>
+</html>
+

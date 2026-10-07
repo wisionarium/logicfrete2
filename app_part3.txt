@@ -1,0 +1,620 @@
+﻿        div.className = 'task-card list-item';
+        div.innerHTML = `
+          <div class="task-header">
+            <div class="task-indicator active"></div>
+            <div class="task-title">${(u.name || 'SEM NOME').toUpperCase()}</div>
+          </div>
+          <div class="task-body">
+            <div class="task-row"><span class="task-label">USUÁRIO:</span> <span class="task-value">${u.username}</span></div>
+            <div class="task-row"><span class="task-label">CARGO:</span> <span class="task-value">${u.role}</span></div>
+          </div>
+          <div class="task-footer">
+            <div class="details-actions">
+               <button class="btn-icon-xs" onclick="event.stopPropagation(); window.openUserModalFromList('${u.id}')" title="Editar"><i class="ri-edit-line"></i></button>
+               <button class="btn-icon-xs" onclick="event.stopPropagation(); window.deleteUserFromList('${u.id}')" title="Excluir"><i class="ri-delete-bin-line"></i></button>
+            </div>
+          </div>
+        `;
+        list.appendChild(div);
+      });
+    };
+          cardRoutes.dataset.listener = "true";
+        }
+
+        if (cardPending && !cardPending.dataset.listener) {
+          cardPending.onclick = () => {
+            const tab = document.getElementById('tab-routes');
+            if(tab) {
+              tab.click();
+              // Auto-filter by planned
+              const filterBtn = document.querySelector('.chip[data-filter="planned"]');
+              if(filterBtn) filterBtn.click();
+            }
+          };
+          cardPending.dataset.listener = "true";
+        }
+
+        if (cardDone && !cardDone.dataset.listener) {
+          cardDone.onclick = () => {
+            const tab = document.getElementById('tab-routes');
+            if(tab) {
+              tab.click();
+              // Auto-filter by done
+              const filterBtn = document.querySelector('.chip[data-filter="done"]');
+              if(filterBtn) filterBtn.click();
+            }
+          };
+          cardDone.dataset.listener = "true";
+        }
+
+        if (cardKm && !cardKm.dataset.listener) {
+          cardKm.onclick = () => {
+            const tab = document.getElementById('tab-calendar');
+            if(tab) {
+              tab.click();
+              calendarCurrentDate = new Date();
+              renderCalendarView();
+            }
+          };
+          cardKm.dataset.listener = "true";
+        }
+
+        const list = document.getElementById('activeRoutesListMain');
+        if (list) {
+          const todayStr = getLocalISODate();
+          const activeRoutes = StorageManager.getRoutes().filter(r => {
+            if (!r.date) return false;
+            const cleanDate = String(r.date).trim();
+            return cleanDate.startsWith(todayStr) && (r.status === 'active' || r.status === 'planned');
+          });
+          
+          if (activeRoutes.length === 0) {
+            list.innerHTML = `<div class="empty-state" style="padding: 20px"><i class="ri-route-line"></i><p>Nenhuma rota para hoje</p></div>`;
+          } else {
+            list.innerHTML = '
+            activeRoutes.forEach(r => {
+              const st = statusMap[r.status] || statusMap['planned'];
+              const div = document.createElement('div');
+              div.className = 'task-card list-item';
+              div.innerHTML = `
+          <div class="task-header">
+            <div class="task-indicator ${d.status === 'delivered' ? 'delivered' : '}"></div>
+            <div class="task-title">${(d.recipient || 'SEM NOME').toUpperCase()}</div>
+          </div>
+          <div class="task-body">
+            <div class="task-row"><span class="task-label">NOME:</span> <span class="task-value">${d.recipient}</span></div>
+            <div class="task-row"><span class="task-label">CPF:</span> <span class="task-value">${d.cpf || '-'}</span></div>
+            <div class="task-row"><span class="task-label">TEL:</span> <span class="task-value">${d.phone || '-'}</span></div>
+            <div class="task-row"><span class="task-label">END:</span> <span class="task-value">${d.address || '-'}</span></div>
+            ${d.notes ? `<div class="task-notes">${d.notes}</div>` : '}
+          </div>
+          <div class="task-footer">
+            <div class="task-date"><i class="ri-calendar-line"></i> ${route ? formatDate(route.date) : '-'}</div>
+            <div class="details-actions">
+              ${window.appPermissions?.canEditRoute ? `<button class="btn-icon-xs" onclick="event.stopPropagation(); window.openDeliveryModalFromList('${d.id}')" title="Editar"><i class="ri-edit-line"></i></button>` : '}
+              <button class="btn-icon-xs" onclick="event.stopPropagation(); window.viewOnMap('${d.routeId}')" title="Ver no Mapa"><i class="ri-map-2-line"></i></button>
+            </div>
+          </div>
+        `;
+              div.addEventListener('click', () => {
+                // Navigate to Calendar and highlight the day
+                const tabCalendar = document.getElementById('tab-calendar');
+                if (tabCalendar) {
+                   tabCalendar.click();
+                   calendarCurrentDate = new Date(r.date + 'T12:00:00'); 
+                   renderCalendarView();
+                }
+              });
+              list.appendChild(div);
+            });
+          }
+        }
+
+        renderWeeklyChart();
+
+      } catch (err) {
+        console.error("Erro ao atualizar dashboard:", err);
+      }
+    }
+
+    function renderWeeklyChart() {
+      const container = document.getElementById('weeklyChartBars');
+      if (!container) return;
+
+      const routes = StorageManager.getRoutes();
+      
+      // Calculate current week range (Mon-Sun)
+      const now = new Date();
+      const dayOfWeek = now.getDay();
+      const diff = now.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+      const startOfWeek = new Date(now.setDate(diff));
+      startOfWeek.setHours(0, 0, 0, 0);
+
+      const dailyKm = [0, 0, 0, 0, 0, 0, 0]; // Mon to Sun
+
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(startOfWeek);
+        d.setDate(startOfWeek.getDate() + i);
+        const dateStr = d.getFullYear() + '-' + 
+                        String(d.getMonth() + 1).padStart(2, '0') + '-' + 
+                        String(d.getDate()).padStart(2, '0');
+        
+        const dayRoutes = routes.filter(r => r.date && String(r.date).startsWith(dateStr));
+        dailyKm[i] = dayRoutes.reduce((sum, r) => {
+          const val = parseFloat(String(r.distanceKm || '0').replace(',', '.')) || 0;
+          return sum + val;
+        }, 0);
+      }
+
+      const maxKm = Math.max(...dailyKm, 10); // Minimum scale of 10km
+      
+      container.innerHTML = dailyKm.map((km, i) => {
+        const height = (km / maxKm) * 100;
+        return `
+          <div class="chart-bar-container">
+            <div class="chart-bar-value">${km.toFixed(1)} km</div>
+            <div class="chart-bar" style="height: ${height}%"></div>
+          </div>
+        `;
+      }).join(');
+    }
+  
+    // === ROUTE MAPPING AND DETAIL PANEL ===
+    function loadRouteToMap(routeId, readOnly = false) {
+      if (!routeId) return;
+      activeRouteId = routeId;
+      const route = StorageManager.getRoute(routeId);
+      if (!route) return;
+  
+      // Update UI List selection
+      if(document.getElementById('panel-routes').classList.contains('active')) {
+         renderRoutesList();
+      }
+  
+      const stops = StorageManager.getDeliveriesByRoute(routeId);
+  
+      const canEdit = !readOnly;
+      const canEditNotes = window.appPermissions?.canEditNotes;
+  
+      // Draw Map
+      MapService.drawRoute(route.origin, stops, (distKm, timeMin) => {
+        // Callback when route calculates distance
+        document.getElementById('rdpDistance').innerText = distKm + ' km';
+        document.getElementById('rdpDuration').innerText = timeMin + ' min';
+        
+        // Save distance to route if not already there and has edit perm
+        if(route.distanceKm !== distKm && canEdit) {
+          route.distanceKm = distKm;
+          route.durationMin = timeMin;
+          StorageManager.saveRoute(route);
+          refreshDashboard();
+        }
+      });
+  
+      // Populate Panel
+      const st = statusMap[route.status] || statusMap['planned'];
+      document.getElementById('rdpBadge').className = `badge ${st.class}`;
+      document.getElementById('rdpBadge').innerText = st.label;
+      document.getElementById('rdpTitle').innerText = route.name;
+      
+      const driver = route.driverId ? (StorageManager.getDrivers().find(d => d.id === route.driverId) || StorageManager.getUsers().find(u => u.id === route.driverId)) : null;
+      const driverName = driver ? driver.name : 'Sem motorista';
+      document.getElementById('rdpMeta').innerHTML = `
+        <span><i class="ri-calendar-line"></i> ${formatDate(route.date)}</span>
+        <span><i class="ri-steering-2-line"></i> ${driverName}</span>
+      `;
+      
+      document.getElementById('rdpStops').innerText = stops.length + ' paradas';
+  
+      // Distance Fallback if routing fails/loading
+      if (route.distanceKm) {
+        document.getElementById('rdpDistance').innerText = route.distanceKm + ' km';
+        document.getElementById('rdpDuration').innerText = route.durationMin + ' min';
+      } else {
+        document.getElementById('rdpDistance').innerText = '...';
+        document.getElementById('rdpDuration').innerText = '...';
+      }
+  
+      // Stops List
+      const stopsList = document.getElementById('rdpStopsList');
+      stopsList.innerHTML = `
+        <li class="stop-item origin">
+          <div class="stop-marker"><i class="ri-map-pin-user-fill"></i></div>
+          <div class="stop-info">
+            <div class="stop-title">Partida (Origem)</div>
+            <div class="stop-address" title="${route.origin?.address}">${route.origin?.address || 'Sem endereÃƒÂ§o'}</div>
+          </div>
+        </li>
+      `;
+  
+      stops.forEach((stop, i) => {
+        const dst = statusMap[stop.status];
+        const li = document.createElement('li');
+        li.className = 'task-card stop-item';
+        li.innerHTML = `
+          <div class="task-header">
+            <div class="task-indicator ${stop.status === 'delivered' ? 'delivered' : '}"></div>
+            <div class="task-title">${(stop.recipient || 'SEM NOME').toUpperCase()}</div>
+          </div>
+          <div class="task-body">
+            <div class="task-row"><span class="task-label">NOME:</span> <span class="task-value">${stop.recipient}</span></div>
+            <div class="task-row"><span class="task-label">CPF:</span> <span class="task-value">${stop.cpf || '-'}</span></div>
+            <div class="task-row"><span class="task-label">TEL:</span> <span class="task-value">${stop.phone || '-'}</span></div>
+            <div class="task-row"><span class="task-label">END:</span> <span class="task-value">${stop.address || '-'}</span></div>
+            ${stop.notes ? `<div class="task-notes">${stop.notes}</div>` : '}
+          </div>
+          <div class="task-footer">
+            <div class="task-date">PARADA ${i + 1}</div>
+            <div class="stop-actions" style="${canEdit ? ' : 'display:none'}">
+              <button class="btn-icon-xs" title="Editar" onclick="window.openDeliveryModalFromMap('${stop.id}')"><i class="ri-edit-2-line"></i></button>
+              <button class="btn-icon-xs" title="Excluir" onclick="window.deleteDeliveryFromMap('${stop.id}')"><i class="ri-delete-bin-line"></i></button>
+            </div>
+          </div>
+        `;
+        stopsList.appendChild(li);
+      });
+  
+      // Start Button Logic
+      const startBtn = document.getElementById('rdpStartBtn');
+      const editBtn = document.getElementById('rdpEditBtn');
+      const deleteBtn = document.getElementById('rdpDeleteBtn');
+      const optimizeBtn = document.getElementById('rdpOptimize');
+      const addStopBtn = document.getElementById('rdpAddStop');
+      
+      deleteBtn.style.display = canEdit ? 'flex' : 'none';
+      optimizeBtn.style.display = (canEdit && window.appPermissions?.canReorder) ? 'flex' : 'none';
+      addStopBtn.style.display = canEdit ? 'flex' : 'none';
+
+      if (!canEdit) {
+        startBtn.style.display = 'none';
+        editBtn.style.display = 'none';
+      } else {
+        editBtn.style.display = 'flex';
+        if (route.status === 'planned') {
+          startBtn.innerHTML = '<i class="ri-play-circle-line"></i> Iniciar';
+          startBtn.className = 'btn-primary';
+          startBtn.style.display = 'flex';
+          startBtn.onclick = () => updateRouteStatus(routeId, 'active');
+        } else if (route.status === 'active') {
+          startBtn.innerHTML = '<i class="ri-checkbox-circle-line"></i> Concluir';
+          startBtn.className = 'btn-primary';
+          startBtn.style.display = 'flex';
+          startBtn.onclick = () => updateRouteStatus(routeId, 'done');
+        } else if (route.status === 'done') {
+          startBtn.innerHTML = '<i class="ri-restart-line"></i> Reativar';
+          startBtn.className = 'btn-secondary';
+          startBtn.style.display = 'flex';
+          startBtn.onclick = () => updateRouteStatus(routeId, 'active');
+        } else {
+          startBtn.style.display = 'none';
+        }
+      }
+  
+      routeDetailPanel.classList.add('show');
+    }
+  
+    window.openDeliveryModalFromMap = openDeliveryModal;
+    window.deleteDeliveryFromMap = (id) => {
+      openConfirmDialog('Remover esta parada da rota?', () => {
+        StorageManager.deleteDelivery(id);
+        loadRouteToMap(activeRouteId);
+        showToast('Parada removida');
+      });
+    };
+  
+    // Update Route Status
+    async function updateRouteStatus(id, newStatus) {
+      const route = StorageManager.getRoute(id);
+      route.status = newStatus;
+      await StorageManager.saveRoute(route);
+      
+      // Auto update deliveries status
+      if (newStatus === 'active') {
+        const stops = StorageManager.getDeliveriesByRoute(id);
+        for (const s of stops) {
+          if (s.status === 'pending') {
+            s.status = 'in_route';
+            await StorageManager.saveDelivery(s);
+          }
+        }
+      }
+      
+      loadRouteToMap(id);
+      renderRoutesList();
+      refreshDashboard();
+      showToast('Status da rota atualizado');
+    }
+  
+    rdpClose.addEventListener('click', () => {
+      routeDetailPanel.classList.remove('show');
+      activeRouteId = null;
+      if(document.getElementById('panel-routes').classList.contains('active')) renderRoutesList();
+      MapService.fitAll();
+    });
+  
+    document.getElementById('rdpEditBtn').addEventListener('click', () => {
+      if (activeRouteId) openRouteModal(activeRouteId);
+    });
+  
+    document.getElementById('rdpDeleteBtn').addEventListener('click', () => {
+      if (activeRouteId) {
+        openConfirmDialog('Excluir esta rota e todas as suas paradas?', () => {
+          StorageManager.deleteRoute(activeRouteId);
+          routeDetailPanel.classList.remove('show');
+          activeRouteId = null;
+          MapService.clearMap();
+          renderRoutesList();
+          refreshDashboard();
+          showToast('Rota excluÃƒÂ­da');
+        });
+      }
+    });
+
+    // === OPTIMIZATION ===
+    document.getElementById('rdpOptimize').addEventListener('click', async () => {
+      if (!activeRouteId) return;
+      const route = StorageManager.getRoute(activeRouteId);
+      const stops = StorageManager.getDeliveriesByRoute(activeRouteId);
+      
+      if (stops.length < 2) {
+        return showToast('Adicione pelo menos 2 paradas para otimizar', 'warning');
+      }
+
+      showToast('Otimizando rota...', 'warning'); // using warning color as 'info'
+      
+      try {
+        const optimizedStops = await MapService.optimizeRoute(route.origin, stops);
+        
+        // Save each stop with its new order
+        optimizedStops.forEach(stop => {
+          StorageManager.saveDelivery(stop);
+        });
+
+        showToast('Rota otimizada com sucesso!');
+        loadRouteToMap(activeRouteId);
+      } catch (err) {
+        showToast('Erro ao otimizar rota', 'error');
+      }
+    });
+  
+    // === UTILS ===
+    function formatDate(dateString) {
+      if (!dateString) return 'Sem data';
+      const [year, month, day] = dateString.split('-');
+      return `${day}/${month}/${year}`;
+    }
+  
+    function showToast(message, type = 'success') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      
+      const icon = type === 'error' ? 'ri-error-warning-line' : 'ri-check-line';
+      toast.innerHTML = `<i class="${icon}"></i> ${message}`;
+      
+      container.appendChild(toast);
+      
+      setTimeout(() => {
+        toast.classList.add('fadeOut');
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+  
+    function openConfirmDialog(message, onConfirm) {
+      document.getElementById('confirmMessage').innerText = message;
+      confirmDialog.style.display = 'flex';
+      setTimeout(() => confirmDialog.classList.add('active'), 10);
+      confirmCallback = onConfirm;
+    }
+  
+    document.getElementById('confirmCancel').addEventListener('click', () => {
+      confirmDialog.classList.remove('active');
+      setTimeout(() => confirmDialog.style.display = 'none', 300);
+      confirmCallback = null;
+    });
+  
+    document.getElementById('confirmOk').addEventListener('click', () => {
+      if (confirmCallback) confirmCallback();
+      confirmDialog.classList.remove('active');
+      setTimeout(() => confirmDialog.style.display = 'none', 300);
+    });
+  
+    // === CALENDAR KANBAN LOGIC ===
+    let calendarCurrentDate = new Date(); // Reference date for the week being viewed
+
+    function renderCalendarView() {
+      const kanban = document.getElementById('calendarKanban');
+      if (!kanban) return;
+
+      const weekDisplay = document.getElementById('calendarWeekDisplay');
+      
+      // Calculate start of current week (Monday)
+      const startOfWeek = new Date(calendarCurrentDate);
+      const day = startOfWeek.getDay();
+      const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
+      startOfWeek.setDate(diff);
+      startOfWeek.setHours(0, 0, 0, 0);
+
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 6);
+
+      // Update week display
+      const options = { month: 'short', day: 'numeric' };
+      weekDisplay.innerText = `${startOfWeek.toLocaleDateString('pt-BR', options)} - ${endOfWeek.toLocaleDateString('pt-BR', options)} (${startOfWeek.getFullYear()})`;
+
+      kanban.innerHTML = '
+      const allRoutes = StorageManager.getRoutes();
+
+      // Create 7 columns for the week
+      for (let i = 0; i < 7; i++) {
+        const currentColumnDate = new Date(startOfWeek);
+        currentColumnDate.setDate(startOfWeek.getDate() + i);
+        
+        const dateStr = currentColumnDate.getFullYear() + '-' + 
+                        String(currentColumnDate.getMonth() + 1).padStart(2, '0') + '-' + 
+                        String(currentColumnDate.getDate()).padStart(2, '0');
+        
+        const routesForDay = allRoutes.filter(r => r.date === dateStr);
+        
+        const isToday = new Date().toDateString() === currentColumnDate.toDateString();
+        
+        const col = document.createElement('div');
+        col.className = `calendar-column ${isToday ? 'is-today' : '}`;
+        col.innerHTML = `
+          <div class="calendar-col-header">
+            <span class="calendar-col-day">${currentColumnDate.toLocaleDateString('pt-BR', { weekday: 'long' })}</span>
+            <span class="calendar-col-date">${currentColumnDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}</span>
+          </div>
+          <div class="calendar-cards-list" 
+               id="calendar-col-${dateStr}"
+               ondragover="window.handleCalendarDragOver(event)"
+               ondragenter="window.handleCalendarDragEnter(event)"
+               ondragleave="window.handleCalendarDragLeave(event)"
+               ondrop="window.handleCalendarDrop(event, '${dateStr}')">
+          </div>
+        `;
+        
+        const cardsList = col.querySelector('.calendar-cards-list');
+        
+        if (routesForDay.length === 0) {
+          // Empty column
+        } else {
+          routesForDay.forEach(r => {
+            const st = statusMap[r.status] || statusMap['planned'];
+            const driver = r.driverId ? (StorageManager.getDrivers().find(d => d.id === r.driverId) || StorageManager.getUsers().find(u => u.id === r.driverId)) : null;
+            
+            const card = document.createElement('div');
+            card.className = 'calendar-route-card';
+            card.draggable = true;
+            card.innerHTML = `
+              <div class="card-status-line ${st.class}"></div>
+              <span class="calendar-route-badge badge ${st.class}">${st.label}</span>
+              <span class="calendar-route-title">${r.name}</span>
+              <div class="calendar-route-info">
+                <span><i class="ri-map-pin-line"></i> ${StorageManager.getDeliveriesByRoute(r.id).length} paradas</span>
+                <span><i class="ri-steering-2-line"></i> ${driver ? driver.name : 'Sem motorista'}</span>
+                ${r.distanceKm ? `<span><i class="ri-map-2-line"></i> ${r.distanceKm} km</span>` : '}
+              </div>
+            `;
+            
+            card.ondragstart = (e) => {
+              e.dataTransfer.setData('routeId', r.id);
+              card.classList.add('dragging');
+            };
+            
+            card.ondragend = () => {
+              card.classList.remove('dragging');
+            };
+            
+            card.onclick = () => {
+              navigateToMap(r.id);
+            };
+            
+            cardsList.appendChild(card);
+          });
+        }
+        
+        kanban.appendChild(col);
+      }
+    }
+
+    // Calendar Drag and Drop Handlers
+    window.handleCalendarDragOver = (e) => {
+      e.preventDefault();
+    };
+
+    window.handleCalendarDragEnter = (e) => {
+      const list = e.target.closest('.calendar-cards-list');
+      if (list) list.classList.add('drag-over');
+    };
+
+    window.handleCalendarDragLeave = (e) => {
+      const list = e.target.closest('.calendar-cards-list');
+      if (list) list.classList.remove('drag-over');
+    };
+
+    window.handleCalendarDrop = (e, newDate) => {
+      e.preventDefault();
+      const routeId = e.dataTransfer.getData('routeId');
+      if (!routeId) return;
+
+      const list = e.target.closest('.calendar-cards-list');
+      if (list) list.classList.remove('drag-over');
+
+      const route = StorageManager.getRoute(routeId);
+      if (route && route.date !== newDate) {
+        route.date = newDate;
+        StorageManager.saveRoute(route);
+        renderCalendarView();
+        showToast(`Rota movida para ${newDate.split('-').reverse().join('/')}`);
+        refreshDashboard();
+      }
+    };
+
+    // Calendar Navigation
+    document.getElementById('btnPrevWeek')?.addEventListener('click', () => {
+      calendarCurrentDate.setDate(calendarCurrentDate.getDate() - 7);
+      renderCalendarView();
+    });
+
+    document.getElementById('btnNextWeek')?.addEventListener('click', () => {
+      calendarCurrentDate.setDate(calendarCurrentDate.getDate() + 7);
+      renderCalendarView();
+    });
+
+    // === INITIALIZATION ===
+    async function initializeApp() {
+      console.log("App: Iniciando initializeApp...");
+      try {
+        // 1. Show UI immediately
+        checkAuth();
+        
+        // 2. Start Sync in background
+        console.log("App: Sincronizando dados com Supabase...");
+        await StorageManager.init();
+
+        const currentUser = StorageManager.getCurrentUser();
+        if (currentUser) {
+          console.log("App: UsuÃ¡rio logado. Atualizando Dashboard...");
+          refreshDashboard();
+
+          // 3. Set auto-refresh for dashboard every 30 seconds
+          setInterval(async () => {
+            console.log("App: SincronizaÃ§Ã£o periÃ³dica iniciada...");
+            await StorageManager.init(); 
+            refreshDashboard();
+            renderRoutesList();
+          }, 30000);
+          
+          // 4. Initialize Map Service (Async)
+          setTimeout(() => {
+            try {
+              console.log("App: Inicializando Map Service...");
+              MapService.init('map');
+            } catch (mapErr) {
+              console.error("App: Erro ao iniciar mapa:", mapErr);
+            }
+          }, 100);
+        } else {
+          console.log("App: Nenhum usuÃ¡rio logado. Tela de login pronta.");
+        }
+      } catch (e) {
+        console.error("App: Erro crÃ­tico na inicializaÃ§Ã£o:", e);
+      }
+    }
+
+    initializeApp();
+  });
+
+
+
+
+
+
+
+
+
+
+
+
+
