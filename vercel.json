@@ -1,12 +1,17 @@
 {
+  "functions": {
+    "api/server.js": {
+      "includeFiles": "index.html, style.css, data.js, maps.js, app.js, tracking.js, sw.js, manifest.json, *.png"
+    }
+  },
   "rewrites": [
     {
       "source": "/api/:path*",
       "destination": "/api/server"
     },
     {
-      "source": "/((?!api/|sw\\.js|manifest\\.json|.*\\.[a-zA-Z0-9]+$).*)",
-      "destination": "/index.html"
+      "source": "/(.*)",
+      "destination": "/api/server"
     }
   ],
   "headers": [
