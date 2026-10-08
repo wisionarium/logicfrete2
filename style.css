@@ -2278,10 +2278,14 @@
     flex-direction: column;
     align-items: center;
     cursor: pointer;
-    transform: translate(-50%, -100%);
+    transform: translate(-50%, -100%) scale(var(--dm-scale, 1));
+    transform-origin: bottom center;
     pointer-events: auto;
     user-select: none;
   }
+  /* Regra anti-gigante: em zoom baixo esconde nomes e mostra mini-ícone */
+  #map.zoom-far .dm-name,
+  #map.zoom-far .dm-dest-label { display: none !important; }
   .dm-name {
     font-size: 11px;
     font-weight: 800;
@@ -2347,7 +2351,8 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    transform: translate(-50%, -100%);
+    transform: translate(-50%, -100%) scale(var(--dm-scale, 1));
+    transform-origin: bottom center;
     cursor: pointer;
   }
   .dm-dest-num {
@@ -2389,6 +2394,95 @@
     cursor: pointer;
     margin-top: 4px;
   }
+  /* ===== Gaveta de motoristas (lista + chave on/off + seguir) ===== */
+  #lfDriverDrawer {
+    position: fixed;
+    top: 70px;
+    right: 12px;
+    width: min(300px, 86vw);
+    max-height: calc(100vh - 160px);
+    background: #0d1b2a;
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 14px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.55);
+    z-index: 2000;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .lf-drawer-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: rgba(255,255,255,.04);
+    color: #e8f0fe;
+    font-size: .9rem;
+  }
+  .lf-drawer-head strong { flex: 1; }
+  .lf-drawer-head button {
+    background: none;
+    border: none;
+    color: #7a8fa6;
+    font-size: 1rem;
+    cursor: pointer;
+  }
+  .lf-drawer-sub {
+    padding: 8px 12px;
+    font-size: .72rem;
+    color: #7a8fa6;
+    border-bottom: 1px solid rgba(255,255,255,.07);
+  }
+  .lf-drawer-list {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    padding: 6px;
+    gap: 4px;
+  }
+  .lf-drawer-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    border-radius: 10px;
+    cursor: pointer;
+  }
+  .lf-drawer-row:hover { background: rgba(255,255,255,.06); }
+  .lf-drawer-row.following { background: rgba(0,230,118,.12); outline: 1px solid rgba(0,230,118,.4); }
+  .lf-drawer-row.off { opacity: .65; }
+  .lf-drawer-info { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+  .lf-drawer-photo {
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid #F5A623;
+    flex-shrink: 0;
+  }
+  .lf-drawer-photo.fallback {
+    display: flex; align-items: center; justify-content: center;
+    background: #e8e8e8; color: #333;
+    font-weight: 800; font-size: 1rem;
+  }
+  .lf-drawer-txt { display: flex; flex-direction: column; min-width: 0; }
+  .lf-drawer-txt strong { color: #e8f0fe; font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lf-drawer-txt small { color: #7a8fa6; font-size: .72rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lf-drawer-empty { color: #7a8fa6; font-size: .8rem; text-align: center; padding: 18px 10px; }
+  /* Chave on/off */
+  .lf-switch { position: relative; display: inline-block; width: 38px; height: 22px; flex-shrink: 0; }
+  .lf-switch input { opacity: 0; width: 0; height: 0; }
+  .lf-switch span {
+    position: absolute; inset: 0;
+    background: #3a4a5e; border-radius: 22px;
+    transition: background .2s; cursor: pointer;
+  }
+  .lf-switch span::before {
+    content: ''; position: absolute;
+    width: 16px; height: 16px; left: 3px; top: 3px;
+    background: #fff; border-radius: 50%;
+    transition: transform .2s;
+  }
+  .lf-switch input:checked + span { background: #00e676; }
+  .lf-switch input:checked + span::before { transform: translateX(16px); }
   
   @keyframes pulse {
     0% { transform: rotate(-45deg) scale(1); }

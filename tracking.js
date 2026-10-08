@@ -22,6 +22,10 @@
   var POLL_ADM_MS = 15000;
   var RETRY_MS = 30000;          // retry do auto-start (dados ainda carregando)
   var MAX_ACCURACY = 100;
+  var SNAP_MIN_MOVE_M = 30;      // só re-cola na via se moveu >30m
+  var SNAP_TTL_MS = 60000;       // ...ou passou 60s do último snap
+  var HIDE_KEY = 'lf_driver_hidden'; // motoristas ocultos na gaveta (JSON array de ids)
+  var FOLLOW_KEY = 'lf_driver_follow'; // motorista seguido no GPS (id ou '')
 
   // ---- Helpers ----
   function $(id) { return document.getElementById(id); }
@@ -406,9 +410,18 @@
     MapService.driverMarkers = {};
     MapService.destMarkers = {};
     MapService.destLineIds = [];
+    MapService.snapCache = {}; // id -> { lng, lat, rawLng, rawLat, at }
+    MapService._lastLoc = {};  // id -> última loc crua (p/ drawer + seguir)
+    MapService.hiddenDrivers = (function () {
+      try { return JSON.parse(localStorage.getItem(HIDE_KEY) || '[]'); } catch (e) { return []; }
+    })();
+    MapService.followDriverId = (function () {
+      try { return localStorage.getItem(FOLLOW_KEY) || ''; } catch (e) { return ''; }
+    })();
     MapService.driverLayerOn = (function () {
       try { return localStorage.getItem(LAYER_KEY) !== '0'; } catch (e) { return true; }
     })();
+    MapService._zoomHooked = false;
 
     // Foto do motorista: API (driver_photo) > cache drivers/users > avatar local > null (genérico)
     MapService.resolveDriverPhoto = function (loc) {
@@ -440,23 +453,248 @@
         '<div class="dm-car">🚚</div></div>';
     };
 
+    // ===== Fase A: colar carro na pista (OSRM nearest + fallback GPS cru) =====
+    MapService.getSnappedPos = function (id, lng, lat) {
+      var c = this.snapCache[id];
+      if (c && isFinite(c.lng) && isFinite(c.lat)) return { lng: c.lng, lat: c.lat, snapped: true };
+      return { lng: lng, lat: lat, snapped: false };
+    };
+
+    MapService.maybeSnapToRoad = function (id, lng, lat) {
+      var self = this;
+      var now = Date.now();
+      var c = this.snapCache[id];
+      if (c && c.rawLng !== undefined) {
+        var moved = distM(c.rawLat, c.rawLng, lat, lng);
+        if (moved < SNAP_MIN_MOVE_M && (now - c.at) < SNAP_TTL_MS) return; // cache ainda vale
+      }
+      var url = 'https://router.project-osrm.org/nearest/v1/driving/' + lng + ',' + lat;
+      try {
+        fetch(url, { signal: AbortSignal.timeout(5000) }).then(function (r) {
+          return r.json();
+        }).then(function (data) {
+          var wp = data && data.waypoints && data.waypoints[0];
+          var p = wp && wp.location;
+          if (p && isFinite(p[0]) && isFinite(p[1])) {
+            self.snapCache[id] = { lng: p[0], lat: p[1], rawLng: lng, rawLat: lat, at: Date.now() };
+          } else {
+            self.snapCache[id] = { lng: lng, lat: lat, rawLng: lng, rawLat: lat, at: Date.now() };
+          }
+          self.applySnappedPos(id);
+        }).catch(function () {
+          // offline/falha: mantém GPS cru
+          self.snapCache[id] = { lng: lng, lat: lat, rawLng: lng, rawLat: lat, at: Date.now() };
+        });
+      } catch (e) {}
+    };
+
+    // Reposiciona marcador + linha após o snap chegar (sem recriar nada)
+    MapService.applySnappedPos = function (id) {
+      var mk = this.driverMarkers[id];
+      var loc = this._lastLoc[id];
+      if (!mk || !loc) return;
+      var p = this.getSnappedPos(id, Number(loc.lng), Number(loc.lat));
+      try { mk.setLngLat([p.lng, p.lat]); } catch (e) {}
+      var adj = {};
+      for (var k in loc) adj[k] = loc[k];
+      adj.lng = p.lng; adj.lat = p.lat;
+      this.drawDriverDestinations(id, adj);
+      if (String(this.followDriverId) === String(id) && this.map && mapVisible()) {
+        try { this.map.easeTo({ center: [p.lng, p.lat] }); } catch (e) {}
+      }
+    };
+
+    // ===== Chave on/off por motorista (gaveta) =====
+    MapService.isDriverHidden = function (id) {
+      return (this.hiddenDrivers || []).indexOf(String(id)) !== -1;
+    };
+    MapService.setDriverHidden = function (id, hide) {
+      id = String(id);
+      var arr = this.hiddenDrivers || [];
+      var i = arr.indexOf(id);
+      if (hide && i === -1) arr.push(id);
+      if (!hide && i !== -1) arr.splice(i, 1);
+      this.hiddenDrivers = arr;
+      try { localStorage.setItem(HIDE_KEY, JSON.stringify(arr)); } catch (e) {}
+      if (hide) {
+        var mk = this.driverMarkers[id];
+        if (mk) { try { mk.remove(); } catch (e) {} delete this.driverMarkers[id]; }
+        var key = 'dest_' + id;
+        if (this.destMarkers[key]) {
+          this.destMarkers[key].forEach(function (m) { try { m.remove(); } catch (e) {} });
+          delete this.destMarkers[key];
+        }
+        if (String(this.followDriverId) === id) this.setFollowDriver('');
+      } else {
+        var loc = this._lastLoc[id];
+        if (loc) this.upsertDriverMarker(loc);
+      }
+      this.renderDriverDrawer();
+    };
+    MapService.setFollowDriver = function (id) {
+      this.followDriverId = id ? String(id) : '';
+      try { localStorage.setItem(FOLLOW_KEY, this.followDriverId); } catch (e) {}
+      this.renderDriverDrawer();
+    };
+
+    MapService.toggleDriverDrawer = function (force) {
+      this.ensureDriverDrawer();
+      var d = $('lfDriverDrawer');
+      if (!d) return;
+      var open = (force !== undefined) ? !!force : d.style.display === 'none';
+      d.style.display = open ? 'flex' : 'none';
+      if (open) this.renderDriverDrawer();
+    };
+
+    MapService.ensureDriverDrawer = function () {
+      if ($('lfDriverDrawer')) return;
+      var self = this;
+      var d = document.createElement('div');
+      d.id = 'lfDriverDrawer';
+      d.style.display = 'none';
+      d.innerHTML =
+        '<div class="lf-drawer-head">' +
+          '<strong>🚚 Motoristas</strong>' +
+          '<label class="lf-switch" title="Camada ON/OFF"><input type="checkbox" id="lfDriverGlobalSwitch"><span></span></label>' +
+          '<button id="lfDrawerClose" title="Fechar">✕</button>' +
+        '</div>' +
+        '<div class="lf-drawer-sub">Toque no motorista para centralizar e seguir. A chave ao lado mostra/oculta ele no mapa.</div>' +
+        '<div id="lfDriverDrawerList" class="lf-drawer-list"></div>';
+      document.body.appendChild(d);
+      $('lfDrawerClose').addEventListener('click', function () { self.toggleDriverDrawer(false); });
+      var gsw = $('lfDriverGlobalSwitch');
+      if (gsw) {
+        gsw.checked = !!self.driverLayerOn;
+        gsw.addEventListener('change', function () { self.setDriverLayer(gsw.checked); });
+      }
+    };
+
+    MapService.renderDriverDrawer = function (rows) {
+      var list = $('lfDriverDrawerList');
+      if (!list) return;
+      var self = this;
+      if (!rows) {
+        if (hasSM()) {
+          StorageManager.getDriverLocations().then(function (r) { self.renderDriverDrawer(r || []); }).catch(function () {});
+        }
+        return;
+      }
+      rows = (rows || []).slice().sort(function (a, b) {
+        return String(a.driver_name || '').localeCompare(String(b.driver_name || ''));
+      });
+      if (!rows.length) {
+        list.innerHTML = '<div class="lf-drawer-empty">Nenhum motorista compartilhando.</div>';
+        return;
+      }
+      list.innerHTML = '';
+      rows.forEach(function (loc) {
+        var id = String(loc.driver_id);
+        var st = driverRowStatus(loc);
+        var photo = self.resolveDriverPhoto(loc);
+        var initial = (String(loc.driver_name || 'M').trim().charAt(0) || 'M').toUpperCase();
+        var row = document.createElement('div');
+        row.className = 'lf-drawer-row' + (String(self.followDriverId) === id ? ' following' : '') + (st.online ? '' : ' off');
+        var photoHtml = photo
+          ? '<img class="lf-drawer-photo" src="' + photo + '" alt="">'
+          : '<div class="lf-drawer-photo fallback">' + escapeHtml(initial) + '</div>';
+        row.innerHTML =
+          '<div class="lf-drawer-info">' + photoHtml +
+            '<div class="lf-drawer-txt"><strong>' + escapeHtml(loc.driver_name || 'Motorista') + '</strong>' +
+            '<small>' + escapeHtml(loc.route_name || 'sem rota') + ' • ' + escapeHtml(st.txt) + '</small></div>' +
+          '</div>' +
+          '<label class="lf-switch" title="Mostrar/ocultar"><input type="checkbox"' + (self.isDriverHidden(id) ? '' : ' checked') + '><span></span></label>';
+        row.addEventListener('click', function (e) {
+          if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SPAN')) return;
+          self.focusDriver(id);
+        });
+        var sw = row.querySelector('input');
+        sw.addEventListener('change', function () { self.setDriverHidden(id, !sw.checked); });
+        list.appendChild(row);
+      });
+    };
+
+    // Centraliza de perto + mostra a rota dele + segue no GPS
+    MapService.focusDriver = function (id) {
+      id = String(id);
+      var loc = this._lastLoc[id];
+      if (!loc && hasSM()) {
+        var self = this;
+        StorageManager.getDriverLocations().then(function (rows) {
+          var f = (rows || []).filter(function (l) { return String(l.driver_id) === id; })[0];
+          if (f) { self._lastLoc[id] = f; self.focusDriver(id); }
+        }).catch(function () {});
+        return;
+      }
+      if (!loc || !this.map) return;
+      if (this.isDriverHidden(id)) this.setDriverHidden(id, false);
+      var p = this.getSnappedPos(id, Number(loc.lng), Number(loc.lat));
+      this.setFollowDriver(id);
+      try { this.map.flyTo({ center: [p.lng, p.lat], zoom: 15 }); } catch (e) {}
+      var mk = this.driverMarkers[id];
+      if (!mk) this.upsertDriverMarker(loc);
+      mk = this.driverMarkers[id];
+      if (mk) { try { mk.togglePopup(); } catch (e) {} }
+      // garante a rota dele visível mesmo se o polling ainda não desenhou
+      var adj = {};
+      for (var k in loc) adj[k] = loc[k];
+      adj.lng = p.lng; adj.lat = p.lat;
+      this.drawDriverDestinations(id, adj);
+    };
+
+    // ===== Fase B: escala do marcador por zoom (regra anti-gigante) =====
+    MapService.applyDriverScale = function () {
+      if (!this.map) return;
+      var z = 15;
+      try { z = this.map.getZoom(); } catch (e) {}
+      var s = 1, hideNames = false;
+      if (z >= 16) s = 1;
+      else if (z >= 15) s = 0.9;
+      else if (z >= 14) s = 0.75;
+      else if (z >= 13) s = 0.6;
+      else if (z >= 12) s = 0.5;
+      else { s = 0.4; hideNames = true; }
+      try {
+        var cont = this.map.getContainer();
+        cont.style.setProperty('--dm-scale', String(s));
+        if (hideNames) cont.classList.add('zoom-far');
+        else cont.classList.remove('zoom-far');
+      } catch (e) {}
+    };
+    MapService.hookDriverZoom = function () {
+      if (this._zoomHooked || !this.map) return;
+      this._zoomHooked = true;
+      var self = this;
+      try {
+        this.map.on('zoom', function () { self.applyDriverScale(); });
+        this.applyDriverScale();
+      } catch (e) {}
+    };
+
     MapService.setDriverLayer = function (on) {
       this.driverLayerOn = !!on;
       try { localStorage.setItem(LAYER_KEY, on ? '1' : '0'); } catch (e) {}
-      if (!on) this.clearDriverMarkers();
+      if (!on) { this.clearDriverMarkers(); this.setFollowDriver(''); }
       else this.refreshDriverLayer();
-      var btn = $('lfDriverLayerBtn');
-      if (btn) btn.classList.toggle('off', !on);
+      var sw = $('lfDriverGlobalSwitch');
+      if (sw) sw.checked = !!on;
+      this.renderDriverDrawer();
     };
 
+    MapService.removeDestGroup = function (key) {
+      var g = this.destMarkers[key];
+      if (g) {
+        g.forEach(function (m) { try { m.remove(); } catch (e) {} });
+        delete this.destMarkers[key];
+      }
+    };
     MapService.clearDriverMarkers = function () {
       var self = this;
       Object.keys(this.driverMarkers).forEach(function (id) {
         try { self.driverMarkers[id].remove(); } catch (e) {}
       });
       this.driverMarkers = {};
-      Object.keys(this.destMarkers || {}).forEach(function (id) {
-        try { self.destMarkers[id].remove(); } catch (e) {}
+      Object.keys(this.destMarkers || {}).forEach(function (key) {
+        self.removeDestGroup(key);
       });
       this.destMarkers = {};
       // Remove linhas de destino motorista -> paradas
@@ -475,6 +713,10 @@
       if (!this.map || !loc || !isFinite(Number(loc.lat)) || !isFinite(Number(loc.lng))) return;
       if (Number(loc.lat) === 0 && Number(loc.lng) === 0) return; // sem posição válida
       var id = String(loc.driver_id);
+      this._lastLoc[id] = loc;
+      if (this.isDriverHidden(id)) return; // chave off na gaveta: não desenha
+      var rawLng = Number(loc.lng), rawLat = Number(loc.lat);
+      var pos = this.getSnappedPos(id, rawLng, rawLat); // carro sempre na pista (ou cru em fallback)
       var updated = new Date(loc.updated_at).getTime();
       var online = !!loc.is_sharing && (Date.now() - updated < ONLINE_MS);
       var name = loc.driver_name || 'Motorista';
@@ -486,34 +728,56 @@
         '<strong>' + escapeHtml(name) + '</strong><br>' +
         'Rota: ' + escapeHtml(loc.route_name || '—') + '<br>' +
         'Vel: ' + (speedKmh !== null ? speedKmh + ' km/h' : '—') + ' • ' + statusTxt + '<br>' +
-        '<button onclick="window._centerDriver(' + Number(loc.lat) + ',' + Number(loc.lng) + ')">Centralizar</button> ' +
-        '<a href="https://www.google.com/maps?q=' + Number(loc.lat) + ',' + Number(loc.lng) + '" target="_blank" rel="noopener">GMaps</a>' +
+        (pos.snapped ? '<small>Posição ajustada à via</small><br>' : '') +
+        '<button onclick="window._centerDriver(' + pos.lat + ',' + pos.lng + ')">Centralizar</button> ' +
+        '<a href="https://www.google.com/maps?q=' + rawLat + ',' + rawLng + '" target="_blank" rel="noopener">GMaps</a>' +
         '</div>';
 
       var photo = this.resolveDriverPhoto(loc);
+      var adj = {};
+      for (var k in loc) adj[k] = loc[k];
+      adj.lng = pos.lng; adj.lat = pos.lat;
       var mk = this.driverMarkers[id];
       if (mk) {
-        try { mk.setLngLat([Number(loc.lng), Number(loc.lat)]); } catch (e) {}
+        var box = (mk.getElement ? mk.getElement() : null);
+        // Legado (elemento raiz era o próprio .driver-marker): recria no formato wrapper
+        if (box && box.classList && box.classList.contains('driver-marker')) {
+          try { mk.remove(); } catch (e) {}
+          delete this.driverMarkers[id];
+          mk = null;
+        }
+      }
+      if (mk) {
+        try { mk.setLngLat([pos.lng, pos.lat]); } catch (e) {}
         if (mk.getElement) {
-          var box = mk.getElement();
-          var inner = box.querySelector('.driver-marker');
+          var box2 = mk.getElement();
+          var inner = box2.querySelector('.driver-marker');
           if (inner) inner.outerHTML = this.buildDriverEl(name, photo, online);
-          else box.innerHTML = this.buildDriverEl(name, photo, online);
+          else box2.innerHTML = this.buildDriverEl(name, photo, online);
         }
         if (mk.getPopup) { try { mk.getPopup().setHTML(popupHtml); } catch (e) {} }
-        this.drawDriverDestinations(id, loc);
-        return;
+        this.drawDriverDestinations(id, adj);
+      } else {
+        // Wrapper externo: o MapLibre posiciona/transforma ELE (inline);
+        // a escala por zoom vive no .driver-marker filho (não é sobrescrita)
+        var el = document.createElement('div');
+        el.className = 'dm-wrap';
+        el.innerHTML = this.buildDriverEl(name, photo, online);
+        try {
+          var marker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+            .setLngLat([pos.lng, pos.lat])
+            .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(popupHtml))
+            .addTo(this.map);
+          this.driverMarkers[id] = marker;
+          this.drawDriverDestinations(id, adj);
+        } catch (e) {}
       }
-      var el = document.createElement('div');
-      el.innerHTML = this.buildDriverEl(name, photo, online);
-      try {
-        var marker = new maplibregl.Marker({ element: el.firstChild })
-          .setLngLat([Number(loc.lng), Number(loc.lat)])
-          .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(popupHtml))
-          .addTo(this.map);
-        this.driverMarkers[id] = marker;
-        this.drawDriverDestinations(id, loc);
-      } catch (e) {}
+      // Tenta colar na pista em fundo (atualiza sozinho quando responder)
+      this.maybeSnapToRoad(id, rawLng, rawLat);
+      // Seguir no GPS: acompanha o motorista centralizado
+      if (String(this.followDriverId) === id && this.map && mapVisible()) {
+        try { this.map.easeTo({ center: [pos.lng, pos.lat] }); } catch (e) {}
+      }
     };
 
     // Desenha todas as paradas da rota do motorista + bandeira na final + linha tracejada
@@ -522,11 +786,7 @@
       if (!this.map || !hasSM()) return;
       var key = 'dest_' + String(driverId);
       // limpa anterior desse motorista
-      try {
-        if (this.destMarkers[key]) {
-          this.destMarkers[key].forEach(function (m) { try { m.remove(); } catch (e) {} });
-        }
-      } catch (e) {}
+      this.removeDestGroup(key);
       this.destMarkers[key] = [];
       var routeId = loc && (loc.route_id || loc.routeId);
       if (!routeId) return;
@@ -541,12 +801,13 @@
         var isLast = i === stops.length - 1;
         var done = String(s.status || '').toLowerCase() === 'delivered';
         var el = document.createElement('div');
+        el.className = 'dm-wrap';
         el.innerHTML = '<div class="dm-dest">' +
           '<div class="dm-dest-num' + (done ? ' done' : '') + '">' + (i + 1) + '</div>' +
           (isLast ? '<div class="dm-dest-flag">🏁</div>' : '') +
           '<div class="dm-dest-label">' + escapeHtml(isLast ? ('DESTINO: ' + (s.recipient || s.address || '')) : (s.recipient || s.address || '')) + '</div></div>';
         try {
-          var m = new maplibregl.Marker({ element: el.firstChild })
+          var m = new maplibregl.Marker({ element: el, anchor: 'bottom' })
             .setLngLat([Number(s.lng), Number(s.lat)])
             .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(
               '<div class="lf-pop"><strong>Parada ' + (i + 1) + (isLast ? ' — DESTINO 🏁' : '') + '</strong><br>' +
@@ -570,7 +831,12 @@
         self.map.addLayer({
           id: layerId, type: 'line', source: sourceId,
           layout: { 'line-join': 'round', 'line-cap': 'round' },
-          paint: { 'line-color': '#111111', 'line-width': 4, 'line-dasharray': [1, 1.6], 'line-opacity': 0.85 }
+          paint: {
+            'line-color': '#111111',
+            'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2, 15, 4, 17, 5],
+            'line-dasharray': [1, 1.6],
+            'line-opacity': 0.85
+          }
         });
         self.destLineIds = (self.destLineIds || []).filter(function (o) { return o.layer !== layerId; });
         self.destLineIds.push({ source: sourceId, layer: layerId });
@@ -580,16 +846,15 @@
     MapService.refreshDriverLayer = function () {
       var self = this;
       if (!hasSM() || !this.map) return Promise.resolve();
+      self.hookDriverZoom();
+      self.ensureDriverDrawer();
       return StorageManager.getDriverLocations().then(function (rows) {
         if (!self.driverLayerOn) return;
         // remove destinos de motoristas que sumiram
         var seen = {};
         (rows || []).forEach(function (loc) { seen['dest_' + String(loc.driver_id)] = true; });
         Object.keys(self.destMarkers || {}).forEach(function (k) {
-          if (!seen[k]) {
-            try { (self.destMarkers[k] || []).forEach(function (m) { try { m.remove(); } catch (e) {} }); } catch (e) {}
-            delete self.destMarkers[k];
-          }
+          if (!seen[k]) self.removeDestGroup(k);
         });
         (rows || []).forEach(function (loc) { self.upsertDriverMarker(loc); });
         var btn = $('lfDriverLayerBtn');
@@ -597,6 +862,7 @@
           var n = (rows || []).filter(function (l) { return l.is_sharing; }).length;
           btn.innerHTML = '🚚 Motoristas (' + n + ')';
         }
+        self.renderDriverDrawer(rows);
       }).catch(function () {});
     };
   }
@@ -622,13 +888,23 @@
     var btn = document.createElement('button');
     btn.id = 'lfDriverLayerBtn';
     btn.className = 'btn-icon theme-btn lf-layer-btn';
-    btn.title = 'Motoristas no mapa (ON/OFF)';
+    btn.title = 'Motoristas no mapa';
     btn.innerHTML = '🚚 Motoristas';
     btn.addEventListener('click', function () {
-      MapService.setDriverLayer(!MapService.driverLayerOn);
+      if (typeof MapService !== 'undefined' && MapService.toggleDriverDrawer) {
+        MapService.toggleDriverDrawer();
+      }
     });
     overlay.insertBefore(btn, overlay.firstChild);
     if (!MapService.driverLayerOn) btn.classList.add('off');
+  }
+
+  // ===== Fase C: gaveta de motoristas (lista + chave on/off + seguir) =====
+  function driverRowStatus(loc) {
+    var updated = new Date(loc.updated_at).getTime();
+    var online = !!loc.is_sharing && (Date.now() - updated < ONLINE_MS);
+    if (!loc.is_sharing) return { online: false, txt: 'pausado' };
+    return { online: online, txt: (online ? 'online • ' : 'offline ') + agoText(loc.updated_at) };
   }
 
   // Polling ADM: 15s, só com mapa visível + admin + camada ON
