@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "Gerenciador de Rotas de Entrega",
   "scripts": {
-    "dev": "node server.js",
-    "start": "node server.js",
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
     "db:info": "node scripts/db-info.js"
   },
   "dependencies": {

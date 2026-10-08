@@ -1,6 +1,6 @@
 -- LOGIC FRETE — Schema Turso (SQLite/libSQL)
 -- Mesmo modelo do Postgres local, traduzido para SQLite.
--- Regras de roles/consentimento que eram funcoes PL/pgSQL vivem no server.js.
+-- Regras de roles/consentimento que eram funcoes PL/pgSQL vivem no src/server.js.
 
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,

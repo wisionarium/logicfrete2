@@ -5,6 +5,7 @@
  * Uso:
  *   npm install
  *   npm run dev   -> http://localhost:3000  (banco no Turso)
+ *   (este arquivo fica em src/ de propósito — ver nota do ROOT acima)
  */
 const fs = require('fs');
 const path = require('path');
@@ -15,9 +16,14 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { createClient } = require('@libsql/client');
 
+// Este arquivo vive em src/ (NÃO na raiz: a Vercel trataria um server.js
+// da raiz como function e quebraria o site estático com "Invalid export").
+// ROOT = pasta do projeto (frontend estático, .env, db/).
+const ROOT = path.join(__dirname, '..');
+
 // ---- .env simples (sem dependencia extra) ----
 (function loadEnv() {
-  const envPath = path.join(__dirname, '.env');
+  const envPath = path.join(ROOT, '.env');
   if (!fs.existsSync(envPath)) return;
   const lines = fs.readFileSync(envPath, 'utf8').split('\n');
   for (const line of lines) {
@@ -132,7 +138,7 @@ function normalizeRole(r) {
 
 async function initDb() {
   await db.execute('PRAGMA foreign_keys = ON');
-  const schema = fs.readFileSync(path.join(__dirname, 'db', 'schema-turso.sql'), 'utf8');
+  const schema = fs.readFileSync(path.join(ROOT, 'db', 'schema-turso.sql'), 'utf8');
   const stmts = schema.split(/;\s*\n/).map((s) => s.trim()).filter(Boolean);
   await db.batch(stmts.map((sql) => ({ sql, args: [] })));
   // Migracoes idempotentes (bancos criados por versoes antigas do schema).
@@ -542,21 +548,21 @@ app.get('/api/db-info', async (_req, res) => {
 // ============ STATIC (somente no servidor local) ============
 // Na Vercel o CDN serve o frontend; a function atende SO /api/*.
 if (require.main === module) {
-  const BLOCKED = [/^\/.env/, /^\/server\.js/, /^\/db\//, /^\/data\//, /^\/node_modules\//, /\/\.env$/, /\.sql$/, /^\/api\/webhook\.js/];
+  const BLOCKED = [/^\/.env/, /^\/src\//, /^\/db\//, /^\/data\//, /^\/node_modules\//, /\/\.env$/, /\.sql$/, /^\/api\/webhook\.js/];
   app.use((req, res, next) => {
     if (BLOCKED.some((re) => re.test(req.path))) return res.status(403).send('Forbidden');
     next();
   });
-  app.use(express.static(__dirname, { index: 'index.html' }));
+  app.use(express.static(ROOT, { index: 'index.html' }));
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api/')) return next();
-    res.sendFile(path.join(__dirname, 'index.html'));
+    res.sendFile(path.join(ROOT, 'index.html'));
   });
 } else {
   app.use((req, res) => res.status(404).json({ error: 'not_found' }));
 }
 
-const INDEX_PATH = path.join(__dirname, 'index.html');
+const INDEX_PATH = path.join(ROOT, 'index.html');
 
 // Pronto quando o schema do Turso foi aplicado (reuso local + serverless Vercel).
 // Sem process.exit na importacao: na Vercel, erro de config vira 500 JSON (debugavel),
@@ -565,7 +571,7 @@ const ready = configError
   ? Promise.reject(new Error(configError))
   : initDb().then(() => app);
 
-// Servidor local: node server.js / npm run dev
+// Servidor local: node src/server.js / npm run dev
 if (require.main === module) {
   if (configError) {
     console.error('\n  ERRO: ' + configError);
@@ -575,7 +581,7 @@ if (require.main === module) {
   ready.then(() => {
     const server = app.listen(PORT, () => {
       console.log('\n  === LOGIC FRETE ===');
-      console.log(`  Pasta do projeto : ${__dirname}`);
+      console.log(`  Pasta do projeto : ${ROOT}`);
       console.log(`  Pagina inicial   : ${INDEX_PATH}`);
       console.log(`  Banco            : ${IS_LOCAL_FILE ? 'SQLite local (teste)' : 'Turso (nuvem)'}`);
       console.log(`  -> Site  : http://localhost:${PORT}   (titulo "LOGIC FRETE")`);

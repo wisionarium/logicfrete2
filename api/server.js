@@ -1,6 +1,6 @@
-// Vercel Serverless: todo /api/* cai no Express de ../server.js
+// Vercel Serverless: todo /api/* cai no Express de ../src/server.js
 // (arquivos estaticos o CDN da Vercel serve sozinho).
-const { app, ready } = require('../server');
+const { app, ready } = require('../src/server');
 
 module.exports = async (req, res) => {
   try {
