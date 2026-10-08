@@ -2273,13 +2273,15 @@
   .marker-pin.marker-planned { background: var(--accent-primary) !important; }
 
   /* ===== Motorista ao vivo: carro ~48px + balão foto+nome (Imagem 2) ===== */
-  /* Regra estilo Google Maps: tamanho fixo em tela, âncora fixa no ponto */
+  /* Regra estilo Google Maps: tamanho fixo em tela, âncora única do MapLibre.
+     SEM translate aqui — o anchor:'bottom' já posiciona a base no ponto;
+     translate duplicado fazia o ícone flutuar e derivar com o zoom. */
   .driver-marker {
     display: flex;
     flex-direction: column;
     align-items: center;
     cursor: pointer;
-    transform: translate(-50%, -100%);
+    transform: none;
     pointer-events: auto;
     user-select: none;
   }
@@ -2353,7 +2355,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    transform: translate(-50%, -100%);
+    transform: none;
     cursor: pointer;
   }
   .dm-dest-num {

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'logic-frete-cache-v32-loja';
+const CACHE_NAME = 'logic-frete-cache-v33-anchor';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
