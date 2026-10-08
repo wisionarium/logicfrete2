@@ -601,40 +601,48 @@ function findBundleStatic() {
   }
   return null;
 }
+// Whitelist de arquivos do frontend servidos pela function.
+// Cada path é literal de propósito: é assim que o bundler da Vercel
+// detecta e inclui os arquivos no bundle (includeFiles sozinho não bastou).
+const BUNDLE_FILES = {
+  '/': path.join(__dirname, '..', 'index.html'),
+  '/index.html': path.join(__dirname, '..', 'index.html'),
+  '/style.css': path.join(__dirname, '..', 'style.css'),
+  '/data.js': path.join(__dirname, '..', 'data.js'),
+  '/maps.js': path.join(__dirname, '..', 'maps.js'),
+  '/app.js': path.join(__dirname, '..', 'app.js'),
+  '/tracking.js': path.join(__dirname, '..', 'tracking.js'),
+  '/sw.js': path.join(__dirname, '..', 'sw.js'),
+  '/manifest.json': path.join(__dirname, '..', 'manifest.json'),
+  '/apple-touch-icon.png': path.join(__dirname, '..', 'apple-touch-icon.png'),
+  '/icone-180.png': path.join(__dirname, '..', 'icone-180.png'),
+  '/icone-192.png': path.join(__dirname, '..', 'icone-192.png'),
+  '/icone-512.png': path.join(__dirname, '..', 'icone-512.png'),
+  '/supra-bike.png': path.join(__dirname, '..', 'supra-bike.png')
+};
+const BUNDLE_INDEX = path.join(__dirname, '..', 'index.html');
 // Espelha o bloco local: arquivo existente = serve; rota sem extensão = index.html (SPA);
 // /api/* desconhecido = 404 JSON; resto com extensão inexistente = 404 texto.
 function serveBundleStatic(req, res, next) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return next();
   if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'not_found' });
   if (BUNDLE_BLOCKED.some((re) => re.test(req.path))) return res.status(403).send('Forbidden');
-  const dir = findBundleStatic();
-  if (!dir) return res.status(500).json({ error: 'static_unavailable' });
   let rel = req.path;
   try { rel = decodeURIComponent(req.path); } catch (e) {}
-  if (rel === '/' || rel.endsWith('/')) rel += 'index.html';
-  const file = path.normalize(path.join(dir, rel));
-  if (!file.startsWith(dir)) return res.status(403).send('Forbidden');
-  fs.readFile(file, (err, buf) => {
-    if (!err) {
-      if (rel === '/manifest.json') {
-        // vercel.json já define o Content-Type do manifest via headers
-        res.setHeader('Content-Type', 'application/manifest+json');
-      } else {
-        res.setHeader('Content-Type', MIME[path.extname(file).toLowerCase()] || 'application/octet-stream');
+  const sendBuf = (f, isIndex) => {
+    fs.readFile(f, (err, buf) => {
+      if (!err) {
+        res.setHeader('Content-Type', MIME[path.extname(f).toLowerCase()] || 'application/octet-stream');
+        return res.send(buf);
       }
-      return res.send(buf);
-    }
-    if (!path.extname(rel)) {
-      const idx = path.join(dir, 'index.html');
-      fs.readFile(idx, (err2, buf2) => {
-        if (err2) return res.status(404).send('Not found');
-        res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        return res.send(buf2);
-      });
-      return;
-    }
-    return res.status(404).send('Not found');
-  });
+      if (isIndex) return res.status(404).send('Not found');
+      return sendBuf(BUNDLE_INDEX, true);
+    });
+  };
+  const file = BUNDLE_FILES[rel];
+  if (file) return sendBuf(file, rel === '/' || rel === '/index.html');
+  if (!path.extname(rel)) return sendBuf(BUNDLE_INDEX, true);
+  return res.status(404).send('Not found');
 }
 if (require.main === module) {
   const BLOCKED = [/^\/.env/, /^\/src\//, /^\/db\//, /^\/data\//, /^\/node_modules\//, /\/\.env$/, /\.sql$/, /^\/api\/webhook\.js/];
@@ -690,4 +698,14 @@ if (require.main === module) {
   }).catch((e) => { console.error('Falha ao iniciar banco:', e); process.exit(1); });
 }
 
-module.exports = { app, ready };
+// NUNCA mudem este export para objeto puro: a Vercel pode carregar este
+// arquivo como function (entrypoint auto-detectado); o export PRECISA ser
+// uma função (com .app/.ready pendurados para o api/server.js usar).
+async function vercelServer(req, res) {
+  await ready;
+  return app(req, res);
+}
+vercelServer.app = app;
+vercelServer.ready = ready;
+
+module.exports = vercelServer;
