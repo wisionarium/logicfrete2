@@ -1,4 +1,4 @@
-const CACHE_NAME = 'logic-frete-cache-v30-fix';
+const CACHE_NAME = 'logic-frete-cache-v31-gmap';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

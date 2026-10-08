@@ -2273,19 +2273,21 @@
   .marker-pin.marker-planned { background: var(--accent-primary) !important; }
 
   /* ===== Motorista ao vivo: carro ~48px + balão foto+nome (Imagem 2) ===== */
+  /* Regra estilo Google Maps: tamanho fixo em tela, âncora fixa no ponto */
   .driver-marker {
     display: flex;
     flex-direction: column;
     align-items: center;
     cursor: pointer;
-    transform: translate(-50%, -100%) scale(var(--dm-scale, 1));
-    transform-origin: bottom center;
+    transform: translate(-50%, -100%);
     pointer-events: auto;
     user-select: none;
   }
-  /* Regra anti-gigante: em zoom baixo esconde nomes e mostra mini-ícone */
+  /* Zoom < 15: só o caminhão, sem rótulos */
   #map.zoom-far .dm-name,
   #map.zoom-far .dm-dest-label { display: none !important; }
+  /* Zoom < 13 (distante): some tudo do motorista */
+  #map.zoom-hide-drivers .dm-wrap { display: none !important; }
   .dm-name {
     font-size: 11px;
     font-weight: 800;
@@ -2351,8 +2353,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    transform: translate(-50%, -100%) scale(var(--dm-scale, 1));
-    transform-origin: bottom center;
+    transform: translate(-50%, -100%);
     cursor: pointer;
   }
   .dm-dest-num {

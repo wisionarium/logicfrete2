@@ -25,6 +25,7 @@
   var SNAP_MIN_MOVE_M = 30;      // só re-cola na via se moveu >30m
   var SNAP_TTL_MS = 60000;       // ...ou passou 60s do último snap
   var SNAP_MAX_JUMP_M = 60;      // ignora via colada a >60m do GPS (rua paralela errada)
+  var DRIVER_HIDE_ZOOM = 13;     // zoom < 13: some tudo do motorista (regra Google Maps)
   var HIDE_KEY = 'lf_driver_hidden'; // motoristas ocultos na gaveta (JSON array de ids)
   var FOLLOW_KEY = 'lf_driver_follow'; // motorista seguido no GPS (id ou '')
 
@@ -513,7 +514,7 @@
       for (var k in loc) adj[k] = loc[k];
       adj.lng = p.lng; adj.lat = p.lat;
       this.drawDriverDestinations(id, adj);
-      if (String(this.followDriverId) === String(id) && this.map && mapVisible()) {
+      if (String(this.followDriverId) === String(id) && this.map && mapVisible() && !this.driversHiddenByZoom()) {
         try { this.map.easeTo({ center: [p.lng, p.lat] }); } catch (e) {}
       }
     };
@@ -656,24 +657,53 @@
       this.drawDriverDestinations(id, adj);
     };
 
-    // ===== Fase B: escala do marcador por zoom (regra anti-gigante) =====
+    // ===== Regra estilo Google Maps: tamanho fixo, âncora fixa, visibilidade por zoom =====
+    // zoom < 13: some tudo do motorista | 13-14: só o caminhão | 15+: completo
+    MapService.driversHiddenByZoom = function () {
+      if (!this.map) return false;
+      var z = 15;
+      try { z = this.map.getZoom(); } catch (e) {}
+      return z < DRIVER_HIDE_ZOOM;
+    };
     MapService.applyDriverScale = function () {
       if (!this.map) return;
       var z = 15;
       try { z = this.map.getZoom(); } catch (e) {}
-      var s = 1, hideNames = false;
-      if (z >= 16) s = 1;
-      else if (z >= 15) s = 0.9;
-      else if (z >= 14) s = 0.75;
-      else if (z >= 13) s = 0.6;
-      else if (z >= 12) s = 0.5;
-      else { s = 0.4; hideNames = true; }
+      var hideAll = z < DRIVER_HIDE_ZOOM;
+      var hideNames = z < 15;
       try {
         var cont = this.map.getContainer();
-        cont.style.setProperty('--dm-scale', String(s));
+        if (hideAll) cont.classList.add('zoom-hide-drivers');
+        else cont.classList.remove('zoom-hide-drivers');
         if (hideNames) cont.classList.add('zoom-far');
         else cont.classList.remove('zoom-far');
       } catch (e) {}
+      // Linhas do canvas não obedecem CSS: liga/desliga visibilidade
+      try {
+        var self = this;
+        (this.destLineIds || []).forEach(function (o) {
+          var layers = o.layers || (o.layer ? [o.layer] : []);
+          layers.forEach(function (L) {
+            if (self.map.getLayer(L)) self.map.setLayoutProperty(L, 'visibility', hideAll ? 'none' : 'visible');
+          });
+        });
+      } catch (e) {}
+      // Fecha popups de motorista ao esconder
+      if (hideAll) {
+        try {
+          var self2 = this;
+          var closePop = function (mk) {
+            if (mk && mk.getPopup) {
+              var p = mk.getPopup();
+              if (p && p.isOpen && p.isOpen()) p.remove();
+            }
+          };
+          Object.keys(this.driverMarkers).forEach(function (id) { closePop(self2.driverMarkers[id]); });
+          Object.keys(this.destMarkers || {}).forEach(function (k) {
+            (self2.destMarkers[k] || []).forEach(closePop);
+          });
+        } catch (e) {}
+      }
     };
     MapService.hookDriverZoom = function () {
       if (this._zoomHooked || !this.map) return;
@@ -743,10 +773,8 @@
       var popupHtml = '<div class="lf-pop">' +
         '<strong>' + escapeHtml(name) + '</strong><br>' +
         'Rota: ' + escapeHtml(loc.route_name || '—') + '<br>' +
-        'Vel: ' + (speedKmh !== null ? speedKmh + ' km/h' : '—') + ' • ' + statusTxt + '<br>' +
-        (pos.snapped ? '<small>Posição ajustada à via</small><br>' : '') +
-        '<button onclick="window._centerDriver(' + pos.lat + ',' + pos.lng + ')">Centralizar</button> ' +
-        '<a href="https://www.google.com/maps?q=' + rawLat + ',' + rawLng + '" target="_blank" rel="noopener">GMaps</a>' +
+        'Vel: ' + (speedKmh !== null ? speedKmh + ' km/h' : '—') + ' • ' + statusTxt +
+        (pos.snapped ? '<br><small>Posição ajustada à via</small>' : '') +
         '</div>';
 
       var photo = this.resolveDriverPhoto(loc);
@@ -790,8 +818,8 @@
       }
       // Tenta colar na pista em fundo (atualiza sozinho quando responder)
       this.maybeSnapToRoad(id, rawLng, rawLat);
-      // Seguir no GPS: acompanha o motorista centralizado
-      if (String(this.followDriverId) === id && this.map && mapVisible()) {
+      // Seguir no GPS: acompanha o motorista centralizado (pausa se distante/oculto)
+      if (String(this.followDriverId) === id && this.map && mapVisible() && !this.driversHiddenByZoom()) {
         try { this.map.easeTo({ center: [pos.lng, pos.lat] }); } catch (e) {}
       }
     };
@@ -966,9 +994,10 @@
           type: 'geojson',
           data: { type: 'Feature', properties: {}, geometry: geometry }
         });
+        var vis = this.driversHiddenByZoom() ? 'none' : 'visible';
         this.map.addLayer({
           id: caseId, type: 'line', source: sourceId,
-          layout: { 'line-join': 'round', 'line-cap': 'round' },
+          layout: { 'line-join': 'round', 'line-cap': 'round', 'visibility': vis },
           paint: {
             'line-color': '#111111', 'line-opacity': 0.9,
             'line-width': ['interpolate', ['linear'], ['zoom'], 10, 4, 15, 7, 17, 9]
@@ -976,7 +1005,7 @@
         });
         this.map.addLayer({
           id: mainId, type: 'line', source: sourceId,
-          layout: { 'line-join': 'round', 'line-cap': 'round' },
+          layout: { 'line-join': 'round', 'line-cap': 'round', 'visibility': vis },
           paint: {
             'line-color': '#FFB300', 'line-opacity': 0.95,
             'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2, 15, 4.5, 17, 6]
@@ -997,7 +1026,7 @@
         });
         this.map.addLayer({
           id: layerId, type: 'line', source: sourceId,
-          layout: { 'line-join': 'round', 'line-cap': 'round' },
+          layout: { 'line-join': 'round', 'line-cap': 'round', 'visibility': (this.driversHiddenByZoom() ? 'none' : 'visible') },
           paint: {
             'line-color': '#111111',
             'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2, 15, 4, 17, 5],
@@ -1039,11 +1068,6 @@
     });
   }
 
-  window._centerDriver = function (lat, lng) {
-    if (typeof MapService !== 'undefined' && MapService.map) {
-      MapService.map.flyTo({ center: [Number(lng), Number(lat)], zoom: 15 });
-    }
-  };
 
   // Diagnóstico: estado do rastreio por motorista (abrir no console do navegador)
   window._driverDebug = function () {
