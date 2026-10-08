@@ -24,6 +24,7 @@
   var MAX_ACCURACY = 100;
   var SNAP_MIN_MOVE_M = 30;      // só re-cola na via se moveu >30m
   var SNAP_TTL_MS = 60000;       // ...ou passou 60s do último snap
+  var SNAP_MAX_JUMP_M = 60;      // ignora via colada a >60m do GPS (rua paralela errada)
   var HIDE_KEY = 'lf_driver_hidden'; // motoristas ocultos na gaveta (JSON array de ids)
   var FOLLOW_KEY = 'lf_driver_follow'; // motorista seguido no GPS (id ou '')
 
@@ -413,6 +414,7 @@
     MapService.snapCache = {}; // id -> { lng, lat, rawLng, rawLat, at, retryAt }
     MapService.routeGeoCache = {}; // routeId -> geometry OSRM (trajeto âmbar)
     MapService.routeGeoFetch = {}; // routeId -> promise em andamento
+    MapService.routeGeoError = {}; // routeId -> último erro OSRM
     MapService._lastLoc = {};  // id -> última loc crua (p/ drawer + seguir)
     MapService.hiddenDrivers = (function () {
       try { return JSON.parse(localStorage.getItem(HIDE_KEY) || '[]'); } catch (e) { return []; }
@@ -458,7 +460,7 @@
     // ===== Fase A: colar carro na pista (OSRM nearest + fallback GPS cru) =====
     MapService.getSnappedPos = function (id, lng, lat) {
       var c = this.snapCache[id];
-      if (c && isFinite(c.lng) && isFinite(c.lat)) return { lng: c.lng, lat: c.lat, snapped: true };
+      if (c && c.ok && isFinite(c.lng) && isFinite(c.lat)) return { lng: c.lng, lat: c.lat, snapped: true };
       return { lng: lng, lat: lat, snapped: false };
     };
 
@@ -479,17 +481,23 @@
           var wp = data && data.waypoints && data.waypoints[0];
           var p = wp && wp.location;
           if (p && isFinite(p[0]) && isFinite(p[1])) {
-            self.snapCache[id] = { lng: p[0], lat: p[1], rawLng: lng, rawLat: lat, at: Date.now() };
+            // Coerência: só cola na via se ela estiver perto do GPS (evita pular p/ rua paralela errada)
+            var jump = distM(lat, lng, p[1], p[0]);
+            if (jump <= SNAP_MAX_JUMP_M) {
+              self.snapCache[id] = { lng: p[0], lat: p[1], rawLng: lng, rawLat: lat, at: Date.now(), ok: true };
+            } else {
+              self.snapCache[id] = { lng: lng, lat: lat, rawLng: lng, rawLat: lat, at: Date.now(), ok: false };
+            }
           } else {
-            self.snapCache[id] = { lng: lng, lat: lat, rawLng: lng, rawLat: lat, at: Date.now() };
+            self.snapCache[id] = { lng: lng, lat: lat, rawLng: lng, rawLat: lat, at: Date.now(), ok: false };
           }
           self.applySnappedPos(id);
         }).catch(function () {
           // offline/falha: preserva último snap e tenta de novo em 5min
           var prev = self.snapCache[id];
-          var keep = (prev && isFinite(prev.lng) && isFinite(prev.lat))
-            ? { lng: prev.lng, lat: prev.lat } : { lng: lng, lat: lat };
-          self.snapCache[id] = { lng: keep.lng, lat: keep.lat, rawLng: lng, rawLat: lat, at: Date.now(), retryAt: Date.now() + 5 * 60 * 1000 };
+          var keep = (prev && prev.ok && isFinite(prev.lng) && isFinite(prev.lat))
+            ? { lng: prev.lng, lat: prev.lat, ok: true } : { lng: lng, lat: lat, ok: false };
+          self.snapCache[id] = { lng: keep.lng, lat: keep.lat, rawLng: lng, rawLat: lat, at: Date.now(), retryAt: Date.now() + 5 * 60 * 1000, ok: keep.ok };
         });
       } catch (e) {}
     };
@@ -798,12 +806,25 @@
       this.destMarkers[key] = [];
       var routeId = loc && (loc.route_id || loc.routeId);
       if (!routeId) return;
+      // Origem da rota: sempre visível quando existir (mesmo sem paradas)
+      var route = null;
+      try { route = StorageManager.getRoute(routeId); } catch (e) { route = null; }
+      var origin = route && route.origin;
+      var hasOrigin = origin && isFinite(Number(origin.lat)) && isFinite(Number(origin.lng)) &&
+        !(Number(origin.lat) === 0 && Number(origin.lng) === 0);
+      if (hasOrigin) this.drawRouteOrigin(key, origin, route);
       var stops = [];
       try { stops = StorageManager.getDeliveriesByRoute(routeId) || []; } catch (e) { stops = []; }
-      stops = stops.filter(function (s) {
+      var stopsValid = stops.filter(function (s) {
         return s && isFinite(Number(s.lat)) && isFinite(Number(s.lng)) && !(Number(s.lat) === 0 && Number(s.lng) === 0);
       }).sort(function (a, b) { return (Number(a.order) || 0) - (Number(b.order) || 0); });
-      if (!stops.length) return;
+      stops = stopsValid;
+      if (!stops.length) {
+        // Sem paradas localizáveis: sem trajeto; avisa uma vez por rota
+        this.removeDriverLines(driverId);
+        this.warnNoStops(routeId, route);
+        return;
+      }
       var lineCoords = [[Number(loc.lng), Number(loc.lat)]];
       stops.forEach(function (s, i) {
         var isLast = i === stops.length - 1;
@@ -829,6 +850,33 @@
       // Trajeto destinado ao motorista em cor diferente (âmbar + contorno),
       // seguindo as ruas como na rota criada (Imagem 4). Fallback: conector reto.
       self.drawDriverRouteLine(driverId, routeId, lineCoords);
+    };
+
+    // Marcador da origem da rota do motorista (partida)
+    MapService.drawRouteOrigin = function (key, origin, route) {
+      var el = document.createElement('div');
+      el.className = 'dm-wrap';
+      el.innerHTML = '<div class="dm-dest">' +
+        '<div class="dm-dest-num">🏠</div>' +
+        '<div class="dm-dest-label">ORIGEM: ' + escapeHtml((route && route.name) || (origin.address || '')) + '</div></div>';
+      try {
+        var m = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+          .setLngLat([Number(origin.lng), Number(origin.lat)])
+          .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(
+            '<div class="lf-pop"><strong>Origem da rota</strong><br>' +
+            escapeHtml((route && route.name) || '') + '<br>' + escapeHtml(origin.address || '') + '</div>'
+          ))
+          .addTo(this.map);
+        this.destMarkers[key].push(m);
+      } catch (e) {}
+    };
+
+    // Aviso único por rota sem paradas localizáveis
+    MapService.warnNoStops = function (routeId, route) {
+      if (!this._warnedNoStops) this._warnedNoStops = {};
+      if (this._warnedNoStops[routeId]) return;
+      this._warnedNoStops[routeId] = true;
+      trackToast('Rota "' + ((route && route.name) || 'do motorista') + '" sem paradas com localização — mostrando só a origem.');
     };
 
     // Remove todas as linhas (trajeto + conector) de um motorista
@@ -886,17 +934,23 @@
         }).then(function (data) {
           delete self.routeGeoFetch[routeId];
           var g = data && data.code === 'Ok' && data.routes && data.routes[0] && data.routes[0].geometry;
+          if (!self.routeGeoError) self.routeGeoError = {};
           if (g) {
             if (!self.routeGeoCache) self.routeGeoCache = {};
             self.routeGeoCache[routeId] = g;
+            delete self.routeGeoError[routeId];
             // Só redesenha se o motorista ainda está no mapa
             if (self.driverMarkers[String(driverId)]) {
               self.removeDriverLines(driverId);
               self.drawAmberRoute(driverId, g);
             }
+          } else {
+            self.routeGeoError[routeId] = 'OSRM: ' + ((data && data.code) || 'sem geometria');
           }
-        }).catch(function () {
+        }).catch(function (err) {
           delete self.routeGeoFetch[routeId]; // mantém o conector reto
+          if (!self.routeGeoError) self.routeGeoError = {};
+          self.routeGeoError[routeId] = 'rede: ' + ((err && err.message) || err);
         });
       } catch (e) {}
     };
@@ -989,6 +1043,39 @@
     if (typeof MapService !== 'undefined' && MapService.map) {
       MapService.map.flyTo({ center: [Number(lng), Number(lat)], zoom: 15 });
     }
+  };
+
+  // Diagnóstico: estado do rastreio por motorista (abrir no console do navegador)
+  window._driverDebug = function () {
+    if (typeof MapService === 'undefined') return { error: 'sem MapService' };
+    var out = {};
+    var locs = MapService._lastLoc || {};
+    Object.keys(locs).forEach(function (id) {
+      var loc = locs[id] || {};
+      var routeId = loc.route_id || loc.routeId;
+      var stops = [];
+      try { stops = hasSM() ? (StorageManager.getDeliveriesByRoute(routeId) || []) : []; } catch (e) {}
+      var route = null;
+      try { route = hasSM() ? StorageManager.getRoute(routeId) : null; } catch (e) {}
+      out[id] = {
+        nome: loc.driver_name,
+        cru: [Number(loc.lng), Number(loc.lat)],
+        snap: MapService.snapCache[id] || null,
+        routeId: routeId,
+        rota: (route && route.name) || loc.route_name,
+        origem: route && route.origin,
+        paradasTotal: stops.length,
+        paradasValidas: stops.filter(function (s) {
+          return s && isFinite(Number(s.lat)) && isFinite(Number(s.lng));
+        }).length,
+        geoEmCache: !!(MapService.routeGeoCache && MapService.routeGeoCache[routeId]),
+        buscandoGeo: !!(MapService.routeGeoFetch && MapService.routeGeoFetch[routeId]),
+        erroGeo: (MapService.routeGeoError && MapService.routeGeoError[routeId]) || null,
+        oculto: MapService.isDriverHidden ? MapService.isDriverHidden(id) : null,
+        seguindo: String(MapService.followDriverId) === String(id)
+      };
+    });
+    return out;
   };
 
   function ensureLayerButton() {

@@ -2342,7 +2342,7 @@
     font-size: 15px;
     color: #333;
   }
-  .dm-car { font-size: 48px; line-height: 1; margin-top: 2px; filter: drop-shadow(0 3px 3px rgba(0,0,0,.45)); }
+  .dm-car { font-size: 48px; line-height: 1; margin-top: 2px; margin-bottom: -24px; filter: drop-shadow(0 3px 3px rgba(0,0,0,.45)); }
   .driver-marker.offline .dm-car { filter: grayscale(1); opacity: .75; }
   .driver-marker.offline .dm-balloon { background: #9aa5b1; }
   .driver-marker.offline .dm-balloon::after { border-top-color: #9aa5b1; }
