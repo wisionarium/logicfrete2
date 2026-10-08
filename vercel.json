@@ -26,6 +26,10 @@
       "destination": "/api/server"
     },
     {
+      "source": "/",
+      "destination": "/api/server"
+    },
+    {
       "source": "/(.*)",
       "destination": "/api/server"
     }

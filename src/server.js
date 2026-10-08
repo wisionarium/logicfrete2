@@ -545,6 +545,32 @@ app.get('/api/db-info', async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ============ DEBUG TEMPORÁRIO (remover depois de estabilizar) ============
+app.get('/api/debug-bundle', requireAdmin, async (_req, res) => {
+  const cands = {
+    ROOT,
+    up1: path.join(__dirname, '..'),
+    up2: path.join(__dirname, '..', '..'),
+    dirname: __dirname,
+    cwd: process.cwd()
+  };
+  const want = ['index.html', 'style.css', 'data.js', 'maps.js', 'app.js', 'tracking.js',
+    'sw.js', 'manifest.json', 'apple-touch-icon.png', 'icone-192.png', 'supra-bike.png',
+    'db/schema-turso.sql', 'src/server.js', 'api/server.js'];
+  const out = { cands: {}, staticDir: findBundleStatic() };
+  for (const [name, dir] of Object.entries(cands)) {
+    try {
+      const entries = fs.readdirSync(dir).slice(0, 40);
+      const has = {};
+      for (const f of want) {
+        try { has[f] = fs.existsSync(path.join(dir, f)); } catch (e) { has[f] = false; }
+      }
+      out.cands[name] = { dir, entries, has };
+    } catch (e) { out.cands[name] = { dir, error: e.message }; }
+  }
+  res.json(out);
+});
+
 // ============ STATIC ============
 // Local (node src/server.js): express.static direto da pasta.
 // Vercel (function api/server.js): o mesmo Express serve o frontend a partir
