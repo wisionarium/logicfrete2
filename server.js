@@ -1,6 +1,6 @@
 /**
  * LOGIC FRETE — Servidor (Turso na nuvem)
- * Backend Express + Turso (SQLite/libSQL na nuvem). Sem Supabase / Vercel.
+ * Backend Express + Turso (SQLite/libSQL na nuvem). Frontend estático via CDN da Vercel, API via function api/server.js.
  *
  * Uso:
  *   npm install
