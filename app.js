@@ -3371,10 +3371,15 @@
 
         // 1. Show UI immediately
         checkAuth();
-        
-        // 2. Start Sync in background
-        console.log("App: Sincronizando dados com Supabase...");
-        await StorageManager.init();
+
+        // 2. Start Sync in background (SOMENTE logado: deslogado os fetches
+        // dariam 401 -> reload -> loop infinito na tela de login)
+        if (StorageManager.getCurrentUser()) {
+          console.log("App: Sincronizando dados com Supabase...");
+          await StorageManager.init();
+        } else {
+          console.log("App: Deslogado, sync pulado (sem reload).");
+        }
 
         // ONE-TIME MIGRATION v11: Definitive Fix for ALL MG Routes
         if (localStorage.getItem('mg_rules_update_done_v11') !== 'true') {

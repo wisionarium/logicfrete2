@@ -12,13 +12,18 @@ function authHeader() {
   } catch (e) { return {}; }
 }
 
-// Sessao invalida/expirada: limpa e volta para a tela de login
+// Sessao invalida/expirada: limpa e volta para a tela de login.
+// So recarrega se HAVIA token (sessao expirada no meio do uso). Sem token
+// (tela de login) nunca recarrega — senao cada 401 virava loop infinito,
+// pois o guard _authRedirecting zera a cada reload.
 function handleUnauthorized() {
+  let hadToken = false;
   try {
+    hadToken = !!localStorage.getItem(TOKEN_KEY);
     localStorage.removeItem('logic_frete_session');
     localStorage.removeItem(TOKEN_KEY);
   } catch (e) {}
-  if (!window._authRedirecting) {
+  if (hadToken && !window._authRedirecting) {
     window._authRedirecting = true;
     window.location.reload();
   }
