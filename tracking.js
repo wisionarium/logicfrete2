@@ -410,7 +410,9 @@
     MapService.driverMarkers = {};
     MapService.destMarkers = {};
     MapService.destLineIds = [];
-    MapService.snapCache = {}; // id -> { lng, lat, rawLng, rawLat, at }
+    MapService.snapCache = {}; // id -> { lng, lat, rawLng, rawLat, at, retryAt }
+    MapService.routeGeoCache = {}; // routeId -> geometry OSRM (trajeto âmbar)
+    MapService.routeGeoFetch = {}; // routeId -> promise em andamento
     MapService._lastLoc = {};  // id -> última loc crua (p/ drawer + seguir)
     MapService.hiddenDrivers = (function () {
       try { return JSON.parse(localStorage.getItem(HIDE_KEY) || '[]'); } catch (e) { return []; }
@@ -465,6 +467,7 @@
       var now = Date.now();
       var c = this.snapCache[id];
       if (c && c.rawLng !== undefined) {
+        if (now < (c.retryAt || 0)) return; // falhou recente: espera o backoff
         var moved = distM(c.rawLat, c.rawLng, lat, lng);
         if (moved < SNAP_MIN_MOVE_M && (now - c.at) < SNAP_TTL_MS) return; // cache ainda vale
       }
@@ -482,8 +485,11 @@
           }
           self.applySnappedPos(id);
         }).catch(function () {
-          // offline/falha: mantém GPS cru
-          self.snapCache[id] = { lng: lng, lat: lat, rawLng: lng, rawLat: lat, at: Date.now() };
+          // offline/falha: preserva último snap e tenta de novo em 5min
+          var prev = self.snapCache[id];
+          var keep = (prev && isFinite(prev.lng) && isFinite(prev.lat))
+            ? { lng: prev.lng, lat: prev.lat } : { lng: lng, lat: lat };
+          self.snapCache[id] = { lng: keep.lng, lat: keep.lat, rawLng: lng, rawLat: lat, at: Date.now(), retryAt: Date.now() + 5 * 60 * 1000 };
         });
       } catch (e) {}
     };
@@ -524,6 +530,7 @@
           this.destMarkers[key].forEach(function (m) { try { m.remove(); } catch (e) {} });
           delete this.destMarkers[key];
         }
+        this.removeDriverLines(id);
         if (String(this.followDriverId) === id) this.setFollowDriver('');
       } else {
         var loc = this._lastLoc[id];
@@ -697,11 +704,12 @@
         self.removeDestGroup(key);
       });
       this.destMarkers = {};
-      // Remove linhas de destino motorista -> paradas
+      // Remove linhas de trajeto/conector dos motoristas
       try {
         (this.destLineIds || []).forEach(function (o) {
           try {
-            if (self.map.getLayer(o.layer)) self.map.removeLayer(o.layer);
+            var layers = o.layers || (o.layer ? [o.layer] : []);
+            layers.forEach(function (L) { if (self.map.getLayer(L)) self.map.removeLayer(L); });
             if (self.map.getSource(o.source)) self.map.removeSource(o.source);
           } catch (e) {}
         });
@@ -818,17 +826,122 @@
         } catch (e) {}
         lineCoords.push([Number(s.lng), Number(s.lat)]);
       });
-      // linha tracejada motorista -> paradas
-      var sourceId = 'lf-dest-src-' + String(driverId);
-      var layerId = 'lf-dest-line-' + String(driverId);
+      // Trajeto destinado ao motorista em cor diferente (âmbar + contorno),
+      // seguindo as ruas como na rota criada (Imagem 4). Fallback: conector reto.
+      self.drawDriverRouteLine(driverId, routeId, lineCoords);
+    };
+
+    // Remove todas as linhas (trajeto + conector) de um motorista
+    MapService.removeDriverLines = function (driverId) {
+      var self = this;
+      var ids = [
+        'lf-droute-case-' + driverId, 'lf-droute-main-' + driverId,
+        'lf-dconn-' + driverId
+      ];
+      var srcs = ['lf-droute-src-' + driverId, 'lf-dconn-src-' + driverId];
       try {
-        if (self.map.getLayer(layerId)) self.map.removeLayer(layerId);
-        if (self.map.getSource(sourceId)) self.map.removeSource(sourceId);
-        self.map.addSource(sourceId, {
+        ids.forEach(function (L) { if (self.map.getLayer(L)) self.map.removeLayer(L); });
+        srcs.forEach(function (S) { if (self.map.getSource(S)) self.map.removeSource(S); });
+      } catch (e) {}
+      this.destLineIds = (this.destLineIds || []).filter(function (o) {
+        return ids.indexOf(o.layer) === -1 && (!o.layers || !o.layers.some(function (L) { return ids.indexOf(L) !== -1; }));
+      });
+    };
+
+    MapService.trackDriverLine = function (sourceId, layers) {
+      this.destLineIds = (this.destLineIds || []).filter(function (o) { return o.source !== sourceId; });
+      this.destLineIds.push({ source: sourceId, layers: layers });
+    };
+
+    // Trajeto real origem -> paradas via OSRM (cache por rota); fallback reto
+    MapService.drawDriverRouteLine = function (driverId, routeId, fallbackCoords) {
+      var self = this;
+      this.removeDriverLines(driverId);
+      var cached = this.routeGeoCache && this.routeGeoCache[routeId];
+      if (cached) {
+        this.drawAmberRoute(driverId, cached);
+        return;
+      }
+      // Mostra o conector reto até a geometria real chegar
+      this.drawStraightConnector(driverId, fallbackCoords);
+      if (this.routeGeoFetch && this.routeGeoFetch[routeId]) return; // já buscando
+      var route = null, origin = null;
+      try { route = hasSM() ? StorageManager.getRoute(routeId) : null; } catch (e) {}
+      origin = route && route.origin;
+      var stops = [];
+      try { stops = hasSM() ? (StorageManager.getDeliveriesByRoute(routeId) || []) : []; } catch (e) {}
+      stops = stops.filter(function (s) {
+        return s && isFinite(Number(s.lat)) && isFinite(Number(s.lng)) && !(Number(s.lat) === 0 && Number(s.lng) === 0);
+      }).sort(function (a, b) { return (Number(a.order) || 0) - (Number(b.order) || 0); });
+      if (!origin || !isFinite(Number(origin.lat)) || !isFinite(Number(origin.lng)) || !stops.length) return;
+      var coords = [[Number(origin.lng), Number(origin.lat)]];
+      stops.forEach(function (s) { coords.push([Number(s.lng), Number(s.lat)]); });
+      var url = 'https://router.project-osrm.org/route/v1/driving/' +
+        coords.map(function (c) { return c.join(','); }).join(';') +
+        '?overview=full&geometries=geojson';
+      if (!this.routeGeoFetch) this.routeGeoFetch = {};
+      try {
+        this.routeGeoFetch[routeId] = fetch(url, { signal: AbortSignal.timeout(8000) }).then(function (r) {
+          return r.json();
+        }).then(function (data) {
+          delete self.routeGeoFetch[routeId];
+          var g = data && data.code === 'Ok' && data.routes && data.routes[0] && data.routes[0].geometry;
+          if (g) {
+            if (!self.routeGeoCache) self.routeGeoCache = {};
+            self.routeGeoCache[routeId] = g;
+            // Só redesenha se o motorista ainda está no mapa
+            if (self.driverMarkers[String(driverId)]) {
+              self.removeDriverLines(driverId);
+              self.drawAmberRoute(driverId, g);
+            }
+          }
+        }).catch(function () {
+          delete self.routeGeoFetch[routeId]; // mantém o conector reto
+        });
+      } catch (e) {}
+    };
+
+    // Trajeto em âmbar com contorno escuro (visível no mapa claro e escuro)
+    MapService.drawAmberRoute = function (driverId, geometry) {
+      var sourceId = 'lf-droute-src-' + driverId;
+      var caseId = 'lf-droute-case-' + driverId;
+      var mainId = 'lf-droute-main-' + driverId;
+      try {
+        this.removeDriverLines(driverId);
+        this.map.addSource(sourceId, {
+          type: 'geojson',
+          data: { type: 'Feature', properties: {}, geometry: geometry }
+        });
+        this.map.addLayer({
+          id: caseId, type: 'line', source: sourceId,
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
+          paint: {
+            'line-color': '#111111', 'line-opacity': 0.9,
+            'line-width': ['interpolate', ['linear'], ['zoom'], 10, 4, 15, 7, 17, 9]
+          }
+        });
+        this.map.addLayer({
+          id: mainId, type: 'line', source: sourceId,
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
+          paint: {
+            'line-color': '#FFB300', 'line-opacity': 0.95,
+            'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2, 15, 4.5, 17, 6]
+          }
+        });
+        this.trackDriverLine(sourceId, [caseId, mainId]);
+      } catch (e) {}
+    };
+
+    // Conector reto motorista -> paradas (usado antes do OSRM responder ou sem origem)
+    MapService.drawStraightConnector = function (driverId, lineCoords) {
+      var sourceId = 'lf-dconn-src-' + driverId;
+      var layerId = 'lf-dconn-' + driverId;
+      try {
+        this.map.addSource(sourceId, {
           type: 'geojson',
           data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: lineCoords } }
         });
-        self.map.addLayer({
+        this.map.addLayer({
           id: layerId, type: 'line', source: sourceId,
           layout: { 'line-join': 'round', 'line-cap': 'round' },
           paint: {
@@ -838,8 +951,7 @@
             'line-opacity': 0.85
           }
         });
-        self.destLineIds = (self.destLineIds || []).filter(function (o) { return o.layer !== layerId; });
-        self.destLineIds.push({ source: sourceId, layer: layerId });
+        this.trackDriverLine(sourceId, [layerId]);
       } catch (e) {}
     };
 
