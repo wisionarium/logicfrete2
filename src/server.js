@@ -545,8 +545,71 @@ app.get('/api/db-info', async (_req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ============ STATIC (somente no servidor local) ============
-// Na Vercel o CDN serve o frontend; a function atende SO /api/*.
+// ============ STATIC ============
+// Local (node src/server.js): express.static direto da pasta.
+// Vercel (function api/server.js): o mesmo Express serve o frontend a partir
+// dos arquivos incluídos no bundle (vercel.json -> includeFiles), pois o
+// vercel.json roteia TUDO (/api/* e demais paths) para a function.
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.webmanifest': 'application/manifest+json',
+  '.txt': 'text/plain; charset=utf-8'
+};
+// Nunca servir pela function (nem pelo server local)
+const BUNDLE_BLOCKED = [/^\/src\//, /^\/db\//, /^\/data\//, /^\/scripts\//, /^\/node_modules\//, /^\/\.env/, /\/\.env$/, /\.sql$/, /\.log$/];
+// Acha a pasta do frontend dentro do bundle da Vercel (estrutura pode variar);
+// localmente é sempre a raiz do projeto (ROOT).
+let bundleDirCache = null;
+function findBundleStatic() {
+  if (bundleDirCache) return bundleDirCache;
+  const cands = [ROOT, path.join(__dirname, '..'), path.join(__dirname, '..', '..'), path.join(__dirname), process.cwd()];
+  for (const c of cands) {
+    try {
+      if (c && fs.existsSync(path.join(c, 'index.html'))) { bundleDirCache = c; return c; }
+    } catch (e) {}
+  }
+  return null;
+}
+// Espelha o bloco local: arquivo existente = serve; rota sem extensão = index.html (SPA);
+// /api/* desconhecido = 404 JSON; resto com extensão inexistente = 404 texto.
+function serveBundleStatic(req, res, next) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+  if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'not_found' });
+  if (BUNDLE_BLOCKED.some((re) => re.test(req.path))) return res.status(403).send('Forbidden');
+  const dir = findBundleStatic();
+  if (!dir) return res.status(500).json({ error: 'static_unavailable' });
+  let rel = req.path;
+  try { rel = decodeURIComponent(req.path); } catch (e) {}
+  if (rel === '/' || rel.endsWith('/')) rel += 'index.html';
+  const file = path.normalize(path.join(dir, rel));
+  if (!file.startsWith(dir)) return res.status(403).send('Forbidden');
+  fs.readFile(file, (err, buf) => {
+    if (!err) {
+      if (rel === '/manifest.json') {
+        // vercel.json já define o Content-Type do manifest via headers
+        res.setHeader('Content-Type', 'application/manifest+json');
+      } else {
+        res.setHeader('Content-Type', MIME[path.extname(file).toLowerCase()] || 'application/octet-stream');
+      }
+      return res.send(buf);
+    }
+    if (!path.extname(rel)) {
+      const idx = path.join(dir, 'index.html');
+      fs.readFile(idx, (err2, buf2) => {
+        if (err2) return res.status(404).send('Not found');
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        return res.send(buf2);
+      });
+      return;
+    }
+    return res.status(404).send('Not found');
+  });
+}
 if (require.main === module) {
   const BLOCKED = [/^\/.env/, /^\/src\//, /^\/db\//, /^\/data\//, /^\/node_modules\//, /\/\.env$/, /\.sql$/, /^\/api\/webhook\.js/];
   app.use((req, res, next) => {
@@ -559,6 +622,7 @@ if (require.main === module) {
     res.sendFile(path.join(ROOT, 'index.html'));
   });
 } else {
+  app.use(serveBundleStatic);
   app.use((req, res) => res.status(404).json({ error: 'not_found' }));
 }
 
