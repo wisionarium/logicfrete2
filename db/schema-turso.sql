@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'Motorista',
   permissions TEXT NOT NULL DEFAULT '[]',
+  photo TEXT,
   created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
@@ -16,6 +17,7 @@ CREATE TABLE IF NOT EXISTS drivers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   phone TEXT,
+  photo TEXT,
   created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 

@@ -200,6 +200,16 @@ async function initDb() {
       }
     }
   } catch (e) { console.warn('Migracao pulada:', e.message); }
+  // 3) Coluna photo em users/drivers (foto do motorista p/ balão no mapa)
+  try {
+    for (const t of ['users', 'drivers']) {
+      const cols = await q(`SELECT name FROM pragma_table_info('${t}')`);
+      if (!cols.rows.some((c) => String(c.name) === 'photo')) {
+        console.log(`Migracao: adicionando ${t}.photo...`);
+        await db.execute(`ALTER TABLE ${t} ADD COLUMN photo TEXT`);
+      }
+    }
+  } catch (e) { console.warn('Migracao photo pulada:', e.message); }
   // Normaliza roles legadas (idempotente)
   const all = await q('SELECT id, role FROM users');
   for (const u of all.rows) {
@@ -223,6 +233,7 @@ const uuid = () => crypto.randomUUID();
 const pubUser = (u) => ({
   id: u.id, name: u.name, username: u.username, role: u.role,
   permissions: parseMaybeJson(u.permissions, []),
+  photo: u.photo || null,
   created_at: u.created_at
 });
 
@@ -251,7 +262,7 @@ app.get('/api/users', async (_req, res) => {
 });
 app.post('/api/users', requireAdminOrSelf, async (req, res) => {
   try {
-    const { name, username, password, role = 'Motorista', permissions = [] } = req.body || {};
+    const { name, username, password, role = 'Motorista', permissions = [], photo = null } = req.body || {};
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'name_username_required' });
     if (!username || !String(username).trim()) return res.status(400).json({ error: 'name_username_required' });
     if (!password) return res.status(400).json({ error: 'password_required' });
@@ -259,8 +270,8 @@ app.post('/api/users', requireAdminOrSelf, async (req, res) => {
     const id = uuid();
     try {
       await q(
-        'INSERT INTO users (id, name, username, password_hash, role, permissions) VALUES ($1,$2,$3,$4,$5,$6)',
-        [id, String(name).trim(), String(username).trim().toLowerCase(), hash, normalizeRole(role), JSON.stringify(permissions || [])]
+        'INSERT INTO users (id, name, username, password_hash, role, permissions, photo) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+        [id, String(name).trim(), String(username).trim().toLowerCase(), hash, normalizeRole(role), JSON.stringify(permissions || []), photo || null]
       );
     } catch (e) {
       if (String(e.message || '').includes('UNIQUE')) return res.status(409).json({ error: 'username_exists' });
@@ -272,7 +283,7 @@ app.post('/api/users', requireAdminOrSelf, async (req, res) => {
 });
 app.put('/api/users/:id', requireAdminOrSelf, async (req, res) => {
   try {
-    const { name, username, password, role, permissions } = req.body || {};
+    const { name, username, password, role, permissions, photo } = req.body || {};
     if (password) {
       const up = await q('UPDATE users SET password_hash = $1 WHERE id = $2', [await bcrypt.hash(String(password), 10), req.params.id]);
       if (up.rows === undefined) { /* libsql update ok */ }
@@ -284,6 +295,7 @@ app.put('/api/users/:id', requireAdminOrSelf, async (req, res) => {
     if (username) { sets.push('username = $' + (vals.length + 1)); vals.push(String(username).trim().toLowerCase()); }
     if (role) { sets.push('role = $' + (vals.length + 1)); vals.push(normalizeRole(role)); }
     if (permissions !== undefined) { sets.push('permissions = $' + (vals.length + 1)); vals.push(JSON.stringify(permissions)); }
+    if (photo !== undefined) { sets.push('photo = $' + (vals.length + 1)); vals.push(photo || null); }
     if (sets.length) {
       try {
         await q(`UPDATE users SET ${sets.join(', ')} WHERE id = $${vals.length + 1}`, [...vals, req.params.id]);
@@ -469,7 +481,7 @@ app.get('/api/track/consent', async (req, res) => {
 app.get('/api/driver-locations', requireAdmin, async (_req, res) => {
   try {
     const r = await q(
-      `SELECT l.*, u.name AS driver_name, u.role AS driver_role, rt.name AS route_name
+      `SELECT l.*, u.name AS driver_name, u.role AS driver_role, u.photo AS driver_photo, rt.name AS route_name
        FROM driver_locations l
        LEFT JOIN users u ON u.id = l.driver_id
        LEFT JOIN routes rt ON rt.id = l.route_id

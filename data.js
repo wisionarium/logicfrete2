@@ -203,7 +203,8 @@ const StorageManager = {
       name: user.name,
       username: (user.username || '').toLowerCase(),
       role: user.role,
-      permissions: user.permissions || []
+      permissions: user.permissions || [],
+      photo: user.photo || null
     };
     if (user.password) payload.password = user.password;
     let saved;
@@ -232,7 +233,7 @@ const StorageManager = {
     return this._cache.drivers;
   },
   async saveDriver(driver) {
-    const payload = { name: driver.name, phone: driver.phone || null };
+    const payload = { name: driver.name, phone: driver.phone || null, photo: driver.photo || null };
     const isNew = !driver.id;
     const saved = isNew
       ? await apiSend('POST', '/api/drivers', payload)

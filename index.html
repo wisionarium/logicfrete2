@@ -784,6 +784,14 @@
         <button class="btn-icon" id="closeModalDriver"><i class="ri-close-line"></i></button>
       </div>
       <div class="modal-body">
+        <div class="form-group" style="display:flex; align-items:center; gap:12px;">
+          <img id="driverPhotoPreview" alt="Foto" style="width:56px; height:56px; border-radius:50%; object-fit:cover; background:#1a2a3a; border:2px solid var(--accent-primary); display:none;" />
+          <div style="flex:1;">
+            <label for="driverPhoto">Foto do motorista (aparece no mapa)</label>
+            <input type="file" id="driverPhoto" accept="image/*" style="width:100%;" />
+            <small class="text-muted">O ADM coloca aqui. Sem foto, o mapa mostra a inicial.</small>
+          </div>
+        </div>
         <div class="form-group">
           <label for="driverName">Nome Completo *</label>
           <input type="text" id="driverName" placeholder="Nome do motorista" />

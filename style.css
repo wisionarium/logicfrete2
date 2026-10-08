@@ -2271,6 +2271,124 @@
   .marker-pin.marker-done { background: #4ade80 !important; }
   .marker-pin.marker-active { background: var(--accent-secondary) !important; animation: pulse 2s infinite; }
   .marker-pin.marker-planned { background: var(--accent-primary) !important; }
+
+  /* ===== Motorista ao vivo: carro ~48px + balão foto+nome (Imagem 2) ===== */
+  .driver-marker {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    cursor: pointer;
+    transform: translate(-50%, -100%);
+    pointer-events: auto;
+    user-select: none;
+  }
+  .dm-name {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .04em;
+    color: #111;
+    background: rgba(255,255,255,.92);
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-bottom: 3px;
+    white-space: nowrap;
+    text-transform: uppercase;
+    box-shadow: 0 1px 3px rgba(0,0,0,.35);
+  }
+  .dm-balloon {
+    position: relative;
+    background: #F5A623;
+    border-radius: 14px;
+    padding: 4px;
+    width: 52px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,.4);
+  }
+  .dm-balloon::after {
+    content: '';
+    position: absolute;
+    bottom: -7px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-top: 8px solid #F5A623;
+  }
+  .dm-photo {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: #e8e8e8;
+    border: 2px solid rgba(255,255,255,.85);
+  }
+  .dm-photo-fallback {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: #e8e8e8;
+    border: 2px solid rgba(255,255,255,.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 15px;
+    color: #333;
+  }
+  .dm-car { font-size: 48px; line-height: 1; margin-top: 2px; filter: drop-shadow(0 3px 3px rgba(0,0,0,.45)); }
+  .driver-marker.offline .dm-car { filter: grayscale(1); opacity: .75; }
+  .driver-marker.offline .dm-balloon { background: #9aa5b1; }
+  .driver-marker.offline .dm-balloon::after { border-top-color: #9aa5b1; }
+  /* ===== Destino da rota: paradas + bandeira final (Imagem 3) ===== */
+  .dm-dest {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transform: translate(-50%, -100%);
+    cursor: pointer;
+  }
+  .dm-dest-num {
+    min-width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #0d1b2a;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid #fff;
+    box-shadow: 0 2px 6px rgba(0,0,0,.4);
+    padding: 0 4px;
+  }
+  .dm-dest-num.done { background: #4ade80; color: #06281c; }
+  .dm-dest-flag { font-size: 34px; line-height: 1; filter: drop-shadow(0 2px 3px rgba(0,0,0,.45)); margin-top: 2px; }
+  .dm-dest-label {
+    font-size: 10px;
+    font-weight: 700;
+    background: rgba(13,25,48,.92);
+    color: #fff;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-top: 2px;
+    white-space: nowrap;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .lf-pop button {
+    background: #00e676;
+    border: none;
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-weight: 700;
+    cursor: pointer;
+    margin-top: 4px;
+  }
   
   @keyframes pulse {
     0% { transform: rotate(-45deg) scale(1); }

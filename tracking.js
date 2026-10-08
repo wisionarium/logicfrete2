@@ -404,9 +404,41 @@
     if (typeof MapService === 'undefined' || MapService._trackExt) return;
     MapService._trackExt = true;
     MapService.driverMarkers = {};
+    MapService.destMarkers = {};
+    MapService.destLineIds = [];
     MapService.driverLayerOn = (function () {
       try { return localStorage.getItem(LAYER_KEY) !== '0'; } catch (e) { return true; }
     })();
+
+    // Foto do motorista: API (driver_photo) > cache drivers/users > avatar local > null (genérico)
+    MapService.resolveDriverPhoto = function (loc) {
+      if (loc && (loc.driver_photo || loc.photo)) return loc.driver_photo || loc.photo;
+      var id = loc ? String(loc.driver_id) : '';
+      try {
+        if (hasSM()) {
+          var d = StorageManager.getDrivers().filter(function (x) { return String(x.id) === id; })[0];
+          if (d && d.photo) return d.photo;
+          var u = StorageManager.getUsers().filter(function (x) { return String(x.id) === id; })[0];
+          if (u && u.photo) return u.photo;
+        }
+      } catch (e) {}
+      try {
+        var av = localStorage.getItem('user_avatar_' + id);
+        if (av) return av;
+      } catch (e) {}
+      return null;
+    };
+
+    MapService.buildDriverEl = function (name, photo, online) {
+      var initial = (String(name || 'M').trim().charAt(0) || 'M').toUpperCase();
+      var photoHtml = photo
+        ? '<img class="dm-photo" src="' + photo + '" alt="">'
+        : '<div class="dm-photo-fallback">' + escapeHtml(initial) + '</div>';
+      return '<div class="driver-marker ' + (online ? 'online' : 'offline') + '">' +
+        '<div class="dm-name">' + escapeHtml(String(name || 'Motorista').toUpperCase()) + '</div>' +
+        '<div class="dm-balloon">' + photoHtml + '</div>' +
+        '<div class="dm-car">🚚</div></div>';
+    };
 
     MapService.setDriverLayer = function (on) {
       this.driverLayerOn = !!on;
@@ -423,6 +455,20 @@
         try { self.driverMarkers[id].remove(); } catch (e) {}
       });
       this.driverMarkers = {};
+      Object.keys(this.destMarkers || {}).forEach(function (id) {
+        try { self.destMarkers[id].remove(); } catch (e) {}
+      });
+      this.destMarkers = {};
+      // Remove linhas de destino motorista -> paradas
+      try {
+        (this.destLineIds || []).forEach(function (o) {
+          try {
+            if (self.map.getLayer(o.layer)) self.map.removeLayer(o.layer);
+            if (self.map.getSource(o.source)) self.map.removeSource(o.source);
+          } catch (e) {}
+        });
+      } catch (e) {}
+      this.destLineIds = [];
     };
 
     MapService.upsertDriverMarker = function (loc) {
@@ -444,25 +490,90 @@
         '<a href="https://www.google.com/maps?q=' + Number(loc.lat) + ',' + Number(loc.lng) + '" target="_blank" rel="noopener">GMaps</a>' +
         '</div>';
 
+      var photo = this.resolveDriverPhoto(loc);
       var mk = this.driverMarkers[id];
       if (mk) {
         try { mk.setLngLat([Number(loc.lng), Number(loc.lat)]); } catch (e) {}
         if (mk.getElement) {
-          var box = mk.getElement().querySelector('.driver-marker');
-          if (box) box.className = 'driver-marker ' + (online ? 'online' : 'offline');
+          var box = mk.getElement();
+          var inner = box.querySelector('.driver-marker');
+          if (inner) inner.outerHTML = this.buildDriverEl(name, photo, online);
+          else box.innerHTML = this.buildDriverEl(name, photo, online);
         }
         if (mk.getPopup) { try { mk.getPopup().setHTML(popupHtml); } catch (e) {} }
+        this.drawDriverDestinations(id, loc);
         return;
       }
       var el = document.createElement('div');
-      el.innerHTML = '<div class="driver-marker ' + (online ? 'online' : 'offline') + '">' +
-        '<div class="dm-pin">🚚</div><div class="dm-label">' + escapeHtml(name) + '</div></div>';
+      el.innerHTML = this.buildDriverEl(name, photo, online);
       try {
         var marker = new maplibregl.Marker({ element: el.firstChild })
           .setLngLat([Number(loc.lng), Number(loc.lat)])
           .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(popupHtml))
           .addTo(this.map);
         this.driverMarkers[id] = marker;
+        this.drawDriverDestinations(id, loc);
+      } catch (e) {}
+    };
+
+    // Desenha todas as paradas da rota do motorista + bandeira na final + linha tracejada
+    MapService.drawDriverDestinations = function (driverId, loc) {
+      var self = this;
+      if (!this.map || !hasSM()) return;
+      var key = 'dest_' + String(driverId);
+      // limpa anterior desse motorista
+      try {
+        if (this.destMarkers[key]) {
+          this.destMarkers[key].forEach(function (m) { try { m.remove(); } catch (e) {} });
+        }
+      } catch (e) {}
+      this.destMarkers[key] = [];
+      var routeId = loc && (loc.route_id || loc.routeId);
+      if (!routeId) return;
+      var stops = [];
+      try { stops = StorageManager.getDeliveriesByRoute(routeId) || []; } catch (e) { stops = []; }
+      stops = stops.filter(function (s) {
+        return s && isFinite(Number(s.lat)) && isFinite(Number(s.lng)) && !(Number(s.lat) === 0 && Number(s.lng) === 0);
+      }).sort(function (a, b) { return (Number(a.order) || 0) - (Number(b.order) || 0); });
+      if (!stops.length) return;
+      var lineCoords = [[Number(loc.lng), Number(loc.lat)]];
+      stops.forEach(function (s, i) {
+        var isLast = i === stops.length - 1;
+        var done = String(s.status || '').toLowerCase() === 'delivered';
+        var el = document.createElement('div');
+        el.innerHTML = '<div class="dm-dest">' +
+          '<div class="dm-dest-num' + (done ? ' done' : '') + '">' + (i + 1) + '</div>' +
+          (isLast ? '<div class="dm-dest-flag">🏁</div>' : '') +
+          '<div class="dm-dest-label">' + escapeHtml(isLast ? ('DESTINO: ' + (s.recipient || s.address || '')) : (s.recipient || s.address || '')) + '</div></div>';
+        try {
+          var m = new maplibregl.Marker({ element: el.firstChild })
+            .setLngLat([Number(s.lng), Number(s.lat)])
+            .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(
+              '<div class="lf-pop"><strong>Parada ' + (i + 1) + (isLast ? ' — DESTINO 🏁' : '') + '</strong><br>' +
+              escapeHtml(s.recipient || '') + '<br>' + escapeHtml(s.address || '') + '</div>'
+            ))
+            .addTo(self.map);
+          self.destMarkers[key].push(m);
+        } catch (e) {}
+        lineCoords.push([Number(s.lng), Number(s.lat)]);
+      });
+      // linha tracejada motorista -> paradas
+      var sourceId = 'lf-dest-src-' + String(driverId);
+      var layerId = 'lf-dest-line-' + String(driverId);
+      try {
+        if (self.map.getLayer(layerId)) self.map.removeLayer(layerId);
+        if (self.map.getSource(sourceId)) self.map.removeSource(sourceId);
+        self.map.addSource(sourceId, {
+          type: 'geojson',
+          data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: lineCoords } }
+        });
+        self.map.addLayer({
+          id: layerId, type: 'line', source: sourceId,
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
+          paint: { 'line-color': '#111111', 'line-width': 4, 'line-dasharray': [1, 1.6], 'line-opacity': 0.85 }
+        });
+        self.destLineIds = (self.destLineIds || []).filter(function (o) { return o.layer !== layerId; });
+        self.destLineIds.push({ source: sourceId, layer: layerId });
       } catch (e) {}
     };
 
@@ -471,6 +582,15 @@
       if (!hasSM() || !this.map) return Promise.resolve();
       return StorageManager.getDriverLocations().then(function (rows) {
         if (!self.driverLayerOn) return;
+        // remove destinos de motoristas que sumiram
+        var seen = {};
+        (rows || []).forEach(function (loc) { seen['dest_' + String(loc.driver_id)] = true; });
+        Object.keys(self.destMarkers || {}).forEach(function (k) {
+          if (!seen[k]) {
+            try { (self.destMarkers[k] || []).forEach(function (m) { try { m.remove(); } catch (e) {} }); } catch (e) {}
+            delete self.destMarkers[k];
+          }
+        });
         (rows || []).forEach(function (loc) { self.upsertDriverMarker(loc); });
         var btn = $('lfDriverLayerBtn');
         if (btn) {

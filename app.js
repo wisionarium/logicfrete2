@@ -1667,18 +1667,59 @@
     const saveDriverBtn = document.getElementById('saveDriver');
     let editingDriverId = null;
   
+    window._driverPhotoData = null;
+    function setDriverPhotoPreview(src) {
+      const img = document.getElementById('driverPhotoPreview');
+      if (!img) return;
+      if (src) { img.src = src; img.style.display = 'block'; }
+      else { img.removeAttribute('src'); img.style.display = 'none'; }
+    }
+    function fileToResizedDataURL(file, maxSize = 128) {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const img = new Image();
+          img.onload = () => {
+            const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+            const w = Math.max(1, Math.round(img.width * scale));
+            const h = Math.max(1, Math.round(img.height * scale));
+            const c = document.createElement('canvas');
+            c.width = w; c.height = h;
+            c.getContext('2d').drawImage(img, 0, 0, w, h);
+            resolve(c.toDataURL('image/jpeg', 0.72));
+          };
+          img.onerror = () => resolve(reader.result);
+          img.src = reader.result;
+        };
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(file);
+      });
+    }
+    document.getElementById('driverPhoto')?.addEventListener('change', async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      window._driverPhotoData = await fileToResizedDataURL(f, 128);
+      setDriverPhotoPreview(window._driverPhotoData);
+    });
+
     function openDriverModal(driverId = null) {
       editingDriverId = driverId;
       const title = document.getElementById('modalDriverTitle');
+      window._driverPhotoData = null;
+      const photoInput = document.getElementById('driverPhoto');
+      if (photoInput) photoInput.value = '';
       if (driverId) {
         title.innerText = 'Editar Motorista';
         const driver = StorageManager.getDriver(editingDriverId);
         document.getElementById('driverName').value = driver.name || ''
         document.getElementById('driverPhone').value = driver.phone || ''
+        if (driver && driver.photo) { window._driverPhotoData = driver.photo; setDriverPhotoPreview(driver.photo); }
+        else setDriverPhotoPreview(null);
       } else {
         title.innerText = 'Novo Motorista';
         document.getElementById('driverName').value = ''
         document.getElementById('driverPhone').value = ''
+        setDriverPhotoPreview(null);
       }
       modalDriver.classList.add('active');
     }
@@ -1698,7 +1739,8 @@
       const driverData = {
         id: editingDriverId,
         name: name,
-        phone: document.getElementById('driverPhone').value
+        phone: document.getElementById('driverPhone').value,
+        photo: window._driverPhotoData || (editingDriverId ? (StorageManager.getDriver(editingDriverId) || {}).photo || null : null)
       };
 
       try {
@@ -2570,7 +2612,7 @@
       
       const combinedDrivers = [
         ...traditionalDrivers.map(d => ({ ...d, isUser: false })),
-        ...userDrivers.map(u => ({ id: u.id, name: u.name, phone: u.phone || '-', isUser: true, vehicle: 'Consultar perfil' }))
+        ...userDrivers.map(u => ({ id: u.id, name: u.name, phone: u.phone || '-', photo: u.photo || null, isUser: true, vehicle: 'Consultar perfil' }))
       ];
       
       if (combinedDrivers.length === 0) {
@@ -2619,6 +2661,7 @@
             <div style="display:flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
               <div style="display:flex; align-items:center; gap:10px; flex: 1; word-break: break-word; min-width: 0;">
                 <div class="task-indicator" style="background: var(--accent-primary); width: 4px; height: 16px; border-radius: 2px; flex-shrink: 0;"></div>
+                ${d.photo ? `<img src="${d.photo}" alt="" style="width:34px; height:34px; border-radius:50%; object-fit:cover; border:2px solid var(--accent-primary); flex-shrink:0;" />` : ''}
                 <span class="item-title">${(d.name || 'SEM NOME').toUpperCase()}</span>
               </div>
               <div class="item-actions">
