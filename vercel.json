@@ -1,7 +1,23 @@
 {
   "functions": {
     "api/server.js": {
-      "includeFiles": "index.html, style.css, data.js, maps.js, app.js, tracking.js, sw.js, manifest.json, *.png, db/schema-turso.sql, src/server.js"
+      "includeFiles": [
+        "index.html",
+        "style.css",
+        "data.js",
+        "maps.js",
+        "app.js",
+        "tracking.js",
+        "sw.js",
+        "manifest.json",
+        "apple-touch-icon.png",
+        "icone-180.png",
+        "icone-192.png",
+        "icone-512.png",
+        "supra-bike.png",
+        "db/schema-turso.sql",
+        "src/server.js"
+      ]
     }
   },
   "rewrites": [
