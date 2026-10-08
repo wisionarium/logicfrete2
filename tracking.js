@@ -26,6 +26,10 @@
   var SNAP_TTL_MS = 60000;       // ...ou passou 60s do último snap
   var SNAP_MAX_JUMP_M = 60;      // ignora via colada a >60m do GPS (rua paralela errada)
   var DRIVER_HIDE_ZOOM = 13;     // zoom < 13: some tudo do motorista (regra Google Maps)
+  var STORE = { lat: -22.709788, lng: -43.165704, address: 'Estrada Real de Mauá, 739 — Guia de Pacobaíba, Magé/RJ' };
+  var ROUTE_SNAP_M = 150;        // cola na rota até 150m; além disso mostra o ponto cru
+  var ROUTE_JUMP_M = 800;        // rejeita salto ao longo da rota (anti-teleporte)
+  var DRIVER_COLORS = ['#1a73e8', '#0091ea', '#304ffe', '#00b8d4', '#003fa3']; // azuis distintos por motorista
   var HIDE_KEY = 'lf_driver_hidden'; // motoristas ocultos na gaveta (JSON array de ids)
   var FOLLOW_KEY = 'lf_driver_follow'; // motorista seguido no GPS (id ou '')
 
@@ -413,9 +417,11 @@
     MapService.destMarkers = {};
     MapService.destLineIds = [];
     MapService.snapCache = {}; // id -> { lng, lat, rawLng, rawLat, at, retryAt }
-    MapService.routeGeoCache = {}; // routeId -> geometry OSRM (trajeto âmbar)
+    MapService.routeGeoCache = {}; // routeId -> geometry OSRM (trajeto do motorista)
     MapService.routeGeoFetch = {}; // routeId -> promise em andamento
     MapService.routeGeoError = {}; // routeId -> último erro OSRM
+    MapService.routeGeoRetryAt = {}; // routeId -> timestamp p/ tentar de novo (backoff)
+    MapService.storeMarker = null; // marcador único da LOJA
     MapService._lastLoc = {};  // id -> última loc crua (p/ drawer + seguir)
     MapService.hiddenDrivers = (function () {
       try { return JSON.parse(localStorage.getItem(HIDE_KEY) || '[]'); } catch (e) { return []; }
@@ -465,9 +471,58 @@
       return { lng: lng, lat: lat, snapped: false };
     };
 
+    // Projeta o GPS sobre a linha da rota (cálculo local, sem rede).
+    // Retorna {lng,lat,len} colado, {kept:true} p/ manter anterior, ou null.
+    MapService.snapToRoute = function (id, routeId, lng, lat) {
+      var g = this.routeGeoCache && this.routeGeoCache[routeId];
+      if (!g || !g.coordinates || g.coordinates.length < 2) return null;
+      var coords = g.coordinates;
+      var kx = Math.cos(lat * Math.PI / 180);
+      var best = null, acc = 0;
+      for (var i = 0; i < coords.length - 1; i++) {
+        var ax = coords[i][0], ay = coords[i][1];
+        var bx = coords[i + 1][0], by = coords[i + 1][1];
+        var dx = (bx - ax) * kx, dy = by - ay;
+        var segLen2 = dx * dx + dy * dy;
+        var t = 0;
+        if (segLen2 > 0) {
+          t = (((lng - ax) * kx * dx + (lat - ay) * dy)) / segLen2;
+          if (t < 0) t = 0;
+          if (t > 1) t = 1;
+        }
+        var px = ax + (bx - ax) * t, py = ay + (by - ay) * t;
+        var segLenM = distM(ay, ax, by, bx);
+        var candLen = acc + segLenM * t;
+        acc += segLenM;
+        var d = distM(lat, lng, py, px);
+        if (!best || d < best.dist) best = { lng: px, lat: py, len: candLen, dist: d };
+      }
+      if (!best || best.dist > ROUTE_SNAP_M) return null; // longe da rota: não força
+      var prev = this.snapCache[id];
+      var prevLen = (prev && prev.routeLen !== undefined) ? prev.routeLen : null;
+      var rawMoved = (prev && prev.rawLng !== undefined) ? distM(prev.rawLat, prev.rawLng, lat, lng) : 9999;
+      if (prevLen !== null && Math.abs(best.len - prevLen) > ROUTE_JUMP_M && rawMoved < 300) {
+        return { kept: true }; // salto suspeito (ruído): mantém o anterior
+      }
+      return best;
+    };
+
     MapService.maybeSnapToRoad = function (id, lng, lat) {
       var self = this;
       var now = Date.now();
+      // 1) ROTA primeiro: força o ícone na pista do trajeto (local, instantâneo)
+      var loc0 = this._lastLoc[id] || {};
+      var routeId0 = loc0.route_id || loc0.routeId;
+      if (routeId0) {
+        var rs = this.snapToRoute(id, routeId0, lng, lat);
+        if (rs && !rs.kept) {
+          this.snapCache[id] = { lng: rs.lng, lat: rs.lat, rawLng: lng, rawLat: lat, at: Date.now(), ok: true, method: 'rota', routeLen: rs.len };
+          this.applySnappedPos(id);
+          return;
+        }
+        if (rs && rs.kept) return; // mantém o anterior
+      }
+      // 2) Rua mais próxima (OSRM nearest) / 3) GPS cru
       var c = this.snapCache[id];
       if (c && c.rawLng !== undefined) {
         if (now < (c.retryAt || 0)) return; // falhou recente: espera o backoff
@@ -485,9 +540,9 @@
             // Coerência: só cola na via se ela estiver perto do GPS (evita pular p/ rua paralela errada)
             var jump = distM(lat, lng, p[1], p[0]);
             if (jump <= SNAP_MAX_JUMP_M) {
-              self.snapCache[id] = { lng: p[0], lat: p[1], rawLng: lng, rawLat: lat, at: Date.now(), ok: true };
+              self.snapCache[id] = { lng: p[0], lat: p[1], rawLng: lng, rawLat: lat, at: Date.now(), ok: true, method: 'rua' };
             } else {
-              self.snapCache[id] = { lng: lng, lat: lat, rawLng: lng, rawLat: lat, at: Date.now(), ok: false };
+              self.snapCache[id] = { lng: lng, lat: lat, rawLng: lng, rawLat: lat, at: Date.now(), ok: false, method: 'cru' };
             }
           } else {
             self.snapCache[id] = { lng: lng, lat: lat, rawLng: lng, rawLat: lat, at: Date.now(), ok: false };
@@ -517,6 +572,34 @@
       if (String(this.followDriverId) === String(id) && this.map && mapVisible() && !this.driversHiddenByZoom()) {
         try { this.map.easeTo({ center: [p.lng, p.lat] }); } catch (e) {}
       }
+    };
+
+    // Cor do motorista (determinística: mesmo motorista, sempre mesma cor)
+    MapService.driverColor = function (id) {
+      var s = String(id || ''), h = 0;
+      for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+      return DRIVER_COLORS[h % DRIVER_COLORS.length];
+    };
+
+    // Marcador único da LOJA (origem fixa de todas as rotas)
+    MapService.ensureStoreMarker = function () {
+      if (this.storeMarker || !this.map) return;
+      var el = document.createElement('div');
+      el.className = 'dm-wrap';
+      el.innerHTML = '<div class="dm-dest">' +
+        '<div class="dm-dest-num">🏪</div>' +
+        '<div class="dm-dest-label">LOJA</div></div>';
+      try {
+        this.storeMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' })
+          .setLngLat([STORE.lng, STORE.lat])
+          .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(
+            '<div class="lf-pop"><strong>🏪 LOJA (origem)</strong><br>' + escapeHtml(STORE.address) + '</div>'
+          ))
+          .addTo(this.map);
+      } catch (e) { this.storeMarker = null; }
+    };
+    MapService.removeStoreMarker = function () {
+      if (this.storeMarker) { try { this.storeMarker.remove(); } catch (e) {} this.storeMarker = null; }
     };
 
     // ===== Chave on/off por motorista (gaveta) =====
@@ -607,6 +690,7 @@
         var id = String(loc.driver_id);
         var st = driverRowStatus(loc);
         var photo = self.resolveDriverPhoto(loc);
+        var color = self.driverColor(id);
         var initial = (String(loc.driver_name || 'M').trim().charAt(0) || 'M').toUpperCase();
         var row = document.createElement('div');
         row.className = 'lf-drawer-row' + (String(self.followDriverId) === id ? ' following' : '') + (st.online ? '' : ' off');
@@ -615,7 +699,7 @@
           : '<div class="lf-drawer-photo fallback">' + escapeHtml(initial) + '</div>';
         row.innerHTML =
           '<div class="lf-drawer-info">' + photoHtml +
-            '<div class="lf-drawer-txt"><strong>' + escapeHtml(loc.driver_name || 'Motorista') + '</strong>' +
+            '<div class="lf-drawer-txt"><strong><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + color + ';margin-right:6px;"></span>' + escapeHtml(loc.driver_name || 'Motorista') + '</strong>' +
             '<small>' + escapeHtml(loc.route_name || 'sem rota') + ' • ' + escapeHtml(st.txt) + '</small></div>' +
           '</div>' +
           '<label class="lf-switch" title="Mostrar/ocultar"><input type="checkbox"' + (self.isDriverHidden(id) ? '' : ' checked') + '><span></span></label>';
@@ -742,6 +826,7 @@
         self.removeDestGroup(key);
       });
       this.destMarkers = {};
+      this.removeStoreMarker();
       // Remove linhas de trajeto/conector dos motoristas
       try {
         (this.destLineIds || []).forEach(function (o) {
@@ -770,11 +855,16 @@
         ? Math.round(Number(loc.speed) * 3.6) : null;
       var statusTxt = !loc.is_sharing ? 'compartilhamento pausado'
         : (online ? 'online • ' + agoText(loc.updated_at) : 'offline ' + agoText(loc.updated_at));
+      var routeIdUp = loc.route_id || loc.routeId;
+      var snapMethod = (this.snapCache[id] || {}).method;
+      var snapNote = pos.snapped
+        ? '<br><small>Na pista' + (snapMethod === 'rota' ? ' (trajeto)' : '') + '</small>'
+        : (routeIdUp ? '<br><small>Fora da rota</small>' : '');
       var popupHtml = '<div class="lf-pop">' +
         '<strong>' + escapeHtml(name) + '</strong><br>' +
         'Rota: ' + escapeHtml(loc.route_name || '—') + '<br>' +
         'Vel: ' + (speedKmh !== null ? speedKmh + ' km/h' : '—') + ' • ' + statusTxt +
-        (pos.snapped ? '<br><small>Posição ajustada à via</small>' : '') +
+        snapNote +
         '</div>';
 
       var photo = this.resolveDriverPhoto(loc);
@@ -834,13 +924,8 @@
       this.destMarkers[key] = [];
       var routeId = loc && (loc.route_id || loc.routeId);
       if (!routeId) return;
-      // Origem da rota: sempre visível quando existir (mesmo sem paradas)
       var route = null;
       try { route = StorageManager.getRoute(routeId); } catch (e) { route = null; }
-      var origin = route && route.origin;
-      var hasOrigin = origin && isFinite(Number(origin.lat)) && isFinite(Number(origin.lng)) &&
-        !(Number(origin.lat) === 0 && Number(origin.lng) === 0);
-      if (hasOrigin) this.drawRouteOrigin(key, origin, route);
       var stops = [];
       try { stops = StorageManager.getDeliveriesByRoute(routeId) || []; } catch (e) { stops = []; }
       var stopsValid = stops.filter(function (s) {
@@ -880,25 +965,6 @@
       self.drawDriverRouteLine(driverId, routeId, lineCoords);
     };
 
-    // Marcador da origem da rota do motorista (partida)
-    MapService.drawRouteOrigin = function (key, origin, route) {
-      var el = document.createElement('div');
-      el.className = 'dm-wrap';
-      el.innerHTML = '<div class="dm-dest">' +
-        '<div class="dm-dest-num">🏠</div>' +
-        '<div class="dm-dest-label">ORIGEM: ' + escapeHtml((route && route.name) || (origin.address || '')) + '</div></div>';
-      try {
-        var m = new maplibregl.Marker({ element: el, anchor: 'bottom' })
-          .setLngLat([Number(origin.lng), Number(origin.lat)])
-          .setPopup(new maplibregl.Popup({ offset: 25 }).setHTML(
-            '<div class="lf-pop"><strong>Origem da rota</strong><br>' +
-            escapeHtml((route && route.name) || '') + '<br>' + escapeHtml(origin.address || '') + '</div>'
-          ))
-          .addTo(this.map);
-        this.destMarkers[key].push(m);
-      } catch (e) {}
-    };
-
     // Aviso único por rota sem paradas localizáveis
     MapService.warnNoStops = function (routeId, route) {
       if (!this._warnedNoStops) this._warnedNoStops = {};
@@ -929,28 +995,27 @@
       this.destLineIds.push({ source: sourceId, layers: layers });
     };
 
-    // Trajeto real origem -> paradas via OSRM (cache por rota); fallback reto
+    // Trajeto real LOJA -> paradas via OSRM (cache por rota); fallback reto
     MapService.drawDriverRouteLine = function (driverId, routeId, fallbackCoords) {
       var self = this;
       this.removeDriverLines(driverId);
       var cached = this.routeGeoCache && this.routeGeoCache[routeId];
       if (cached) {
-        this.drawAmberRoute(driverId, cached);
+        this.drawDriverRoute(driverId, routeId, cached);
         return;
       }
       // Mostra o conector reto até a geometria real chegar
       this.drawStraightConnector(driverId, fallbackCoords);
       if (this.routeGeoFetch && this.routeGeoFetch[routeId]) return; // já buscando
-      var route = null, origin = null;
-      try { route = hasSM() ? StorageManager.getRoute(routeId) : null; } catch (e) {}
-      origin = route && route.origin;
+      if (this.routeGeoRetryAt && this.routeGeoRetryAt[routeId] && Date.now() < this.routeGeoRetryAt[routeId]) return; // backoff
       var stops = [];
       try { stops = hasSM() ? (StorageManager.getDeliveriesByRoute(routeId) || []) : []; } catch (e) {}
       stops = stops.filter(function (s) {
         return s && isFinite(Number(s.lat)) && isFinite(Number(s.lng)) && !(Number(s.lat) === 0 && Number(s.lng) === 0);
       }).sort(function (a, b) { return (Number(a.order) || 0) - (Number(b.order) || 0); });
-      if (!origin || !isFinite(Number(origin.lat)) || !isFinite(Number(origin.lng)) || !stops.length) return;
-      var coords = [[Number(origin.lng), Number(origin.lat)]];
+      if (!stops.length) return;
+      // Origem sempre a LOJA (constante STORE)
+      var coords = [[STORE.lng, STORE.lat]];
       stops.forEach(function (s) { coords.push([Number(s.lng), Number(s.lat)]); });
       var url = 'https://router.project-osrm.org/route/v1/driving/' +
         coords.map(function (c) { return c.join(','); }).join(';') +
@@ -963,31 +1028,49 @@
           delete self.routeGeoFetch[routeId];
           var g = data && data.code === 'Ok' && data.routes && data.routes[0] && data.routes[0].geometry;
           if (!self.routeGeoError) self.routeGeoError = {};
+          if (!self.routeGeoRetryAt) self.routeGeoRetryAt = {};
           if (g) {
             if (!self.routeGeoCache) self.routeGeoCache = {};
             self.routeGeoCache[routeId] = g;
             delete self.routeGeoError[routeId];
+            delete self.routeGeoRetryAt[routeId];
             // Só redesenha se o motorista ainda está no mapa
             if (self.driverMarkers[String(driverId)]) {
               self.removeDriverLines(driverId);
-              self.drawAmberRoute(driverId, g);
+              self.drawDriverRoute(driverId, routeId, g);
             }
+            // Geometria chegou: re-cola na rota os motoristas dessa rota
+            Object.keys(self._lastLoc || {}).forEach(function (did) {
+              var l = self._lastLoc[did];
+              if (l && String(l.route_id || l.routeId) === String(routeId)) {
+                var rs = self.snapToRoute(did, routeId, Number(l.lng), Number(l.lat));
+                if (rs && !rs.kept) {
+                  self.snapCache[did] = { lng: rs.lng, lat: rs.lat, rawLng: Number(l.lng), rawLat: Number(l.lat), at: Date.now(), ok: true, method: 'rota', routeLen: rs.len };
+                  self.applySnappedPos(did);
+                }
+              }
+            });
           } else {
             self.routeGeoError[routeId] = 'OSRM: ' + ((data && data.code) || 'sem geometria');
+            self.routeGeoRetryAt[routeId] = Date.now() + 5 * 60 * 1000; // backoff: não martela o OSRM
           }
         }).catch(function (err) {
           delete self.routeGeoFetch[routeId]; // mantém o conector reto
           if (!self.routeGeoError) self.routeGeoError = {};
+          if (!self.routeGeoRetryAt) self.routeGeoRetryAt = {};
           self.routeGeoError[routeId] = 'rede: ' + ((err && err.message) || err);
+          self.routeGeoRetryAt[routeId] = Date.now() + 5 * 60 * 1000; // backoff
         });
       } catch (e) {}
     };
 
-    // Trajeto em âmbar com contorno escuro (visível no mapa claro e escuro)
-    MapService.drawAmberRoute = function (driverId, geometry) {
+    // Trajeto do motorista na cor dele (estilo Google Maps: cor sólida + halo)
+    MapService.drawDriverRoute = function (driverId, routeId, geometry) {
       var sourceId = 'lf-droute-src-' + driverId;
       var caseId = 'lf-droute-case-' + driverId;
       var mainId = 'lf-droute-main-' + driverId;
+      var color = this.driverColor(driverId);
+      var followed = String(this.followDriverId) === String(driverId);
       try {
         this.removeDriverLines(driverId);
         this.map.addSource(sourceId, {
@@ -999,16 +1082,20 @@
           id: caseId, type: 'line', source: sourceId,
           layout: { 'line-join': 'round', 'line-cap': 'round', 'visibility': vis },
           paint: {
-            'line-color': '#111111', 'line-opacity': 0.9,
-            'line-width': ['interpolate', ['linear'], ['zoom'], 10, 4, 15, 7, 17, 9]
+            'line-color': color, 'line-opacity': 0.35,
+            'line-width': followed
+              ? ['interpolate', ['linear'], ['zoom'], 10, 6, 15, 10, 17, 12]
+              : ['interpolate', ['linear'], ['zoom'], 10, 5, 15, 8, 17, 10]
           }
         });
         this.map.addLayer({
           id: mainId, type: 'line', source: sourceId,
           layout: { 'line-join': 'round', 'line-cap': 'round', 'visibility': vis },
           paint: {
-            'line-color': '#FFB300', 'line-opacity': 0.95,
-            'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2, 15, 4.5, 17, 6]
+            'line-color': color, 'line-opacity': 0.95,
+            'line-width': followed
+              ? ['interpolate', ['linear'], ['zoom'], 10, 3, 15, 6, 17, 8]
+              : ['interpolate', ['linear'], ['zoom'], 10, 2, 15, 4.5, 17, 6]
           }
         });
         this.trackDriverLine(sourceId, [caseId, mainId]);
@@ -1043,6 +1130,7 @@
       if (!hasSM() || !this.map) return Promise.resolve();
       self.hookDriverZoom();
       self.ensureDriverDrawer();
+      self.ensureStoreMarker();
       return StorageManager.getDriverLocations().then(function (rows) {
         if (!self.driverLayerOn) return;
         // remove destinos de motoristas que sumiram
@@ -1083,8 +1171,10 @@
       try { route = hasSM() ? StorageManager.getRoute(routeId) : null; } catch (e) {}
       out[id] = {
         nome: loc.driver_name,
+        cor: MapService.driverColor ? MapService.driverColor(id) : null,
         cru: [Number(loc.lng), Number(loc.lat)],
         snap: MapService.snapCache[id] || null,
+        metodoCola: ((MapService.snapCache[id] || {}).method) || null,
         routeId: routeId,
         rota: (route && route.name) || loc.route_name,
         origem: route && route.origin,
